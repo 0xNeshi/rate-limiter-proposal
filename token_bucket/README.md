@@ -2,6 +2,8 @@
 
 A simple, reusable onchain rate-limiter pattern for Sui.
 
+This is what is used in [Deepbook's reference implementation](https://github.com/MystenLabs/deepbookv3/blob/fc77fb207169be2e79ca9c24aae4ae46431fad1b/packages/deepbook_margin/sources/rate_limiter.move).
+
 This package shows how to separate **configuration**, **state claiming**, and **live usage** so products can enforce limits cleanly, upgrade safely, and explain behavior clearly. It includes two concrete examples:
 
 - **Vault**
