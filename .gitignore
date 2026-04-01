@@ -1,0 +1,26 @@
+# Sui build artifacts
+build
+.sui/
+sui.keystore
+.trace
+.coverage_map.mvcov
+
+# OS generated files
+.DS_Store
+._*
+
+# Logs
+*.log
+logs/
+
+# Node.js artifacts
+node_modules
+package.json
+package-lock.json
+
+# Temporary folders
+tmp/
+temp/
+
+# Everyone uses their own local dev environment config, so we should not force specific VS Code configs
+.vscode/
