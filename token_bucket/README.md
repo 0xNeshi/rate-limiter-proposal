@@ -63,18 +63,23 @@ This is useful when the product needs to control **total outflow**, not individu
 - **Fast operational updates**
   - when policy changes, the vault can migrate its single shared state immediately
 
-## Vault Flow: Initial Creation
+## Vault Architecture at Creation
 
 ```mermaid
-flowchart TD
-    A[Admin calls create_and_share] --> B[Create immutable Policy<WithdrawTag>]
-    B --> C[Create Registry<WithdrawTag>]
-    C --> D[Claim global State from registry]
-    D --> E[Create shared Vault object]
-    E --> F[Share Vault]
-    D --> G[Share State]
-    C --> H[Share Registry]
-    B --> I[Freeze Policy]
+flowchart LR
+    Admin[Admin]
+    Vault[Shared Vault]
+    Policy[Immutable Policy<WithdrawTag>]
+    Registry[Shared Registry<WithdrawTag>]
+    State[Shared global State<WithdrawTag>]
+
+    Admin --> Vault
+    Admin --> Policy
+    Admin --> Registry
+    Registry --> State
+    Vault --> Policy
+    Vault --> Registry
+    Vault --> State
 ```
 
 ## Vault Flow: Withdraw
@@ -93,13 +98,20 @@ flowchart TD
 ## Vault Flow: Update Rate Limiter Configuration
 
 ```mermaid
-flowchart TD
-    A[Admin submits new rate limit config] --> B[Create new immutable Policy]
-    B --> C[Read current shared State under old Policy]
-    C --> D[Migrate State to new Policy]
-    D --> E[Clamp tokens to new capacity if needed]
-    E --> F[Vault stores new active policy id]
-    F --> G[Future withdrawals use new Policy immediately]
+sequenceDiagram
+    participant Admin
+    participant Vault
+    participant OldPolicy as Old Policy
+    participant State as Shared State
+    participant NewPolicy as New Policy
+
+    Admin->>Vault: submit new config
+    Vault->>NewPolicy: create new immutable policy
+    Vault->>State: read state under old policy
+    Vault->>State: migrate to new policy
+    State-->>Vault: clamp tokens to new capacity if needed
+    Vault->>Vault: store new active policy id
+    Vault-->>Admin: future withdrawals now use new policy
 ```
 
 # Example 2: Mage Game
@@ -119,17 +131,24 @@ This is useful when the product wants a shared ruleset, but independent player o
 - **Safer live balancing**
   - the game can switch to a new policy while letting players migrate explicitly
 
-## Mage Game Flow: Initial Creation
+## Mage Game Architecture at Creation
 
 ```mermaid
-flowchart TD
-    A[Admin calls create_and_share] --> B[Create immutable Policy<ManaTag>]
-    B --> C[Create Registry<ManaTag>]
-    C --> D[Create shared Game]
-    D --> E[Game stores active policy id]
-    D --> F[Share Game]
-    C --> G[Share Registry]
-    B --> H[Freeze Policy]
+flowchart LR
+    Admin[Admin]
+    Game[Shared Game]
+    Policy[Immutable Policy<ManaTag>]
+    Registry[Shared Registry<ManaTag>]
+    Mage[Owned Mage]
+    Mana[Wrapped State<ManaTag>]
+
+    Admin --> Game
+    Admin --> Policy
+    Admin --> Registry
+    Game --> Policy
+    Game --> Registry
+    Registry --> Mana
+    Mage --> Mana
 ```
 
 ## Mage Game Flow: Cast Spell
@@ -149,23 +168,36 @@ flowchart TD
 ## Mage Game Flow: Update Rate Limiter Configuration
 
 ```mermaid
-flowchart TD
-    A[Admin submits new mana config] --> B[Create new immutable Policy]
-    B --> C[Game updates active policy id]
-    C --> D[Old Policy remains available]
-    D --> E[Existing mages are not auto-migrated]
-    E --> F[New reads and casts expect the latest Policy]
+sequenceDiagram
+    participant Admin
+    participant Game
+    participant CurrentPolicy as Current Policy
+    participant NewPolicy as New Policy
+    participant Mages as Existing Mages
+
+    Admin->>Game: submit new mana config
+    Game->>CurrentPolicy: verify current policy is active
+    Game->>NewPolicy: create new immutable policy
+    Game->>Game: update active policy id
+    Game-->>Mages: existing mages are not auto-migrated
+    Game-->>Admin: future reads and casts expect latest policy
 ```
 
 ## Mage Game Flow: Player Policy Migration
 
 ```mermaid
-flowchart TD
-    A[Player loads Mage + old Policy + latest Policy + Game] --> B[Check player owns Mage]
-    B --> C[Check latest Policy matches Game.active_policy_id]
-    C --> D[Migrate Mage mana State from old Policy to latest Policy]
-    D --> E[Clamp mana to new capacity if needed]
-    E --> F[Mage can now cast under latest Policy]
+sequenceDiagram
+    participant Player
+    participant Game
+    participant Mage
+    participant OldPolicy as Old Policy
+    participant NewPolicy as Latest Policy
+
+    Player->>Game: present mage + old policy + latest policy
+    Game->>Mage: verify ownership
+    Game->>NewPolicy: verify latest policy is active
+    Mage->>Mage: migrate wrapped mana state
+    Mage-->>Player: mage is now current under latest policy
 ```
 
 # Key Difference Between the Two Examples
