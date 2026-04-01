@@ -1,6 +1,0 @@
-[package]
-name = "fixed_window"
-edition = "2024"
-
-[addresses]
-fixed_window = "0x0"
