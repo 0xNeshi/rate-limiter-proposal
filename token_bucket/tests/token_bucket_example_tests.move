@@ -1,12 +1,12 @@
 #[test_only]
-module token_bucket_example::token_bucket_example_tests;
+module token_bucket::token_bucket_tests;
 
 use std::unit_test::assert_eq;
 use sui::clock;
 use sui::coin;
 use sui::test_scenario;
-use token_bucket_example::token_bucket;
-use token_bucket_example::vault;
+use token_bucket::token_bucket;
+use token_bucket::vault;
 
 #[test]
 fun partial_withdrawal_succeeds() {

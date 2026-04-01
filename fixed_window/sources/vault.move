@@ -1,10 +1,10 @@
-module token_bucket_example::vault;
+module fixed_window::vault;
 
+use fixed_window::fixed_window;
 use sui::balance::{Self as balance, Balance};
 use sui::clock::Clock;
 use sui::coin::{Self as coin, Coin};
 use sui::sui::SUI;
-use token_bucket_example::token_bucket;
 
 #[error(code = 0)]
 const EInsufficientVaultBalance: vector<u8> = "Insufficient vault balance";
@@ -22,20 +22,11 @@ public struct WithdrawTag has copy, drop, store {}
 public fun create_and_share(
     initial_coin: Coin<SUI>,
     version: u16,
-    capacity: u64,
-    refill_numerator: u64,
-    refill_denominator_ms: u64,
-    initial_tokens: u64,
+    window_ms: u64,
+    limit: u64,
     ctx: &mut TxContext,
 ) {
-    let policy = token_bucket::create_policy<WithdrawTag>(
-        version,
-        capacity,
-        refill_numerator,
-        refill_denominator_ms,
-        initial_tokens,
-        ctx,
-    );
+    let policy = fixed_window::create_policy<WithdrawTag>(version, window_ms, limit, ctx);
     let vault = Vault {
         id: object::new(ctx),
         policy_id: object::id(&policy),
@@ -47,20 +38,15 @@ public fun create_and_share(
 
 public fun deposit(
     self: &mut Vault,
-    policy: &token_bucket::Policy<WithdrawTag>,
+    policy: &fixed_window::Policy<WithdrawTag>,
     deposit_coin: Coin<SUI>,
     clock: &Clock,
     ctx: &mut TxContext,
-): token_bucket::State<WithdrawTag> {
+): fixed_window::State<WithdrawTag> {
     assert_policy(self, policy);
     balance::join(&mut self.balance, coin::into_balance(deposit_coin));
     let withdrawer = tx_context::sender(ctx);
-    token_bucket::create_for_address<WithdrawTag>(
-        policy,
-        withdrawer,
-        clock,
-        ctx,
-    )
+    fixed_window::create_for_address<WithdrawTag>(policy, withdrawer, clock, ctx)
 }
 
 public fun value(self: &Vault): u64 {
@@ -69,14 +55,14 @@ public fun value(self: &Vault): u64 {
 
 public fun withdraw(
     self: &mut Vault,
-    policy: &token_bucket::Policy<WithdrawTag>,
-    state: &mut token_bucket::State<WithdrawTag>,
+    policy: &fixed_window::Policy<WithdrawTag>,
+    state: &mut fixed_window::State<WithdrawTag>,
     amount: u64,
     clock: &Clock,
     ctx: &mut TxContext,
 ): Coin<SUI> {
     assert_policy(self, policy);
-    token_bucket::consume_or_abort(policy, state, amount, clock);
+    fixed_window::consume_or_abort(policy, state, amount, clock);
     withdraw_unchecked(self, amount, ctx)
 }
 
@@ -92,6 +78,6 @@ public fun destroy_empty(self: Vault) {
     id.delete();
 }
 
-fun assert_policy(self: &Vault, policy: &token_bucket::Policy<WithdrawTag>) {
+fun assert_policy(self: &Vault, policy: &fixed_window::Policy<WithdrawTag>) {
     assert!(self.policy_id == object::id(policy), EWrongPolicy);
 }

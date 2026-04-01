@@ -1,4 +1,4 @@
-module cooldown_example::cooldown;
+module fixed_window::fixed_window;
 
 use sui::clock::Clock;
 
@@ -17,7 +17,8 @@ const EInvalidPolicy: vector<u8> = "Invalid policy";
 public struct Policy<phantom Tag> has key, store {
     id: UID,
     version: u16,
-    cooldown_ms: u64,
+    window_ms: u64,
+    limit: u64,
     enabled: bool,
 }
 
@@ -26,16 +27,22 @@ public struct State<phantom Tag> has key, store {
     policy_id: ID,
     scope_kind: u8,
     scope_key_hash: vector<u8>,
-    last_action_ms: u64,
-    has_acted: bool,
+    window_start_ms: u64,
+    used: u64,
 }
 
-public fun create_policy<Tag>(version: u16, cooldown_ms: u64, ctx: &mut TxContext): Policy<Tag> {
-    assert!(cooldown_ms > 0, EInvalidPolicy);
+public fun create_policy<Tag>(
+    version: u16,
+    window_ms: u64,
+    limit: u64,
+    ctx: &mut TxContext,
+): Policy<Tag> {
+    assert!(window_ms > 0, EInvalidPolicy);
     Policy {
         id: object::new(ctx),
         version,
-        cooldown_ms,
+        window_ms,
+        limit,
         enabled: true,
     }
 }
@@ -50,8 +57,8 @@ public fun create_global_state<Tag>(
         policy_id: object::id(policy),
         scope_kind: SCOPE_KIND_GLOBAL,
         scope_key_hash: vector[],
-        last_action_ms: clock.timestamp_ms(),
-        has_acted: false,
+        window_start_ms: clock.timestamp_ms(),
+        used: 0,
     }
 }
 
@@ -67,19 +74,18 @@ public fun create_for_address<Tag>(
         policy_id: object::id(policy),
         scope_kind: SCOPE_KIND_ADDRESS,
         scope_key_hash: vector[],
-        last_action_ms: clock.timestamp_ms(),
-        has_acted: false,
+        window_start_ms: clock.timestamp_ms(),
+        used: 0,
     }
 }
 
 public fun available<Tag>(policy: &Policy<Tag>, state: &State<Tag>, clock: &Clock): u64 {
     assert_policy(policy, state);
-    if (!state.has_acted) {
-        1
-    } else if (clock.timestamp_ms() >= state.last_action_ms + policy.cooldown_ms) {
-        1
-    } else {
+    let used = current_used(policy, state, clock.timestamp_ms());
+    if (used >= policy.limit) {
         0
+    } else {
+        policy.limit - used
     }
 }
 
@@ -91,31 +97,37 @@ public fun consume_or_abort<Tag>(
 ) {
     assert!(policy.enabled, EPolicyDisabled);
     assert_policy(policy, state);
-    let _ = amount;
-    if (state.has_acted) {
-        assert!(clock.timestamp_ms() >= state.last_action_ms + policy.cooldown_ms, ERateLimited);
-    };
-    state.last_action_ms = clock.timestamp_ms();
-    state.has_acted = true;
+    let now_ms = clock.timestamp_ms();
+    let (window_start_ms, used) = current_window(policy, state, now_ms);
+    assert!(used + amount <= policy.limit, ERateLimited);
+    state.window_start_ms = window_start_ms;
+    state.used = used + amount;
 }
 
 public fun destroy_policy<Tag>(policy: Policy<Tag>) {
-    let Policy { id, version: _, cooldown_ms: _, enabled: _ } = policy;
+    let Policy { id, version: _, window_ms: _, limit: _, enabled: _ } = policy;
     id.delete();
 }
 
 public fun destroy_state<Tag>(state: State<Tag>) {
-    let State {
-        id,
-        policy_id: _,
-        scope_kind: _,
-        scope_key_hash: _,
-        last_action_ms: _,
-        has_acted: _,
-    } = state;
+    let State { id, policy_id: _, scope_kind: _, scope_key_hash: _, window_start_ms: _, used: _ } =
+        state;
     id.delete();
 }
 
 fun assert_policy<Tag>(policy: &Policy<Tag>, state: &State<Tag>) {
     assert!(state.policy_id == object::id(policy), EPolicyMismatch);
+}
+
+fun current_used<Tag>(policy: &Policy<Tag>, state: &State<Tag>, now_ms: u64): u64 {
+    let (_, used) = current_window(policy, state, now_ms);
+    used
+}
+
+fun current_window<Tag>(policy: &Policy<Tag>, state: &State<Tag>, now_ms: u64): (u64, u64) {
+    if (now_ms >= state.window_start_ms + policy.window_ms) {
+        (now_ms, 0)
+    } else {
+        (state.window_start_ms, state.used)
+    }
 }

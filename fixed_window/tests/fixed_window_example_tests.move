@@ -1,8 +1,8 @@
 #[test_only]
-module fixed_window_example::fixed_window_example_tests;
+module fixed_window::fixed_window_tests;
 
-use fixed_window_example::fixed_window;
-use fixed_window_example::vault;
+use fixed_window::fixed_window;
+use fixed_window::vault;
 use std::unit_test::assert_eq;
 use sui::clock;
 use sui::coin;

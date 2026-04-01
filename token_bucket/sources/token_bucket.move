@@ -1,4 +1,4 @@
-module token_bucket_example::token_bucket;
+module token_bucket::token_bucket;
 
 use sui::clock::Clock;
 

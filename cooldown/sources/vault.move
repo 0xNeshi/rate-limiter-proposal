@@ -1,6 +1,6 @@
-module cooldown_example::vault;
+module cooldown::vault;
 
-use cooldown_example::cooldown;
+use cooldown::cooldown;
 use sui::balance::{Self as balance, Balance};
 use sui::clock::Clock;
 use sui::coin::{Self as coin, Coin};

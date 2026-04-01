@@ -1,8 +1,8 @@
 #[test_only]
-module cooldown_example::cooldown_example_tests;
+module cooldown::cooldown_tests;
 
-use cooldown_example::cooldown;
-use cooldown_example::vault;
+use cooldown::cooldown;
+use cooldown::vault;
 use std::unit_test::assert_eq;
 use sui::clock;
 use sui::coin;
