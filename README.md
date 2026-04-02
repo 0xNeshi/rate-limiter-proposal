@@ -199,6 +199,17 @@ possible hardening idea is already implemented.
 
 Possible future hardening directions include:
 
+- **Supporting both immutable and mutable policy strategies**
+  - one option would be an immutable flow such as `create_policy_and_freeze`, where a new policy is
+    created and old policies continue to exist, making explicit user or object migration the natural
+    upgrade path
+  - another option would be a mutable flow built around `create_policy` plus an in-place update API,
+    where one policy remains authoritative and a policy update applies to all users immediately
+  - this may be more complexity than the library needs, so it should be weighed carefully against
+    the simpler immutable-only model
+  - the immutable strategy remains especially attractive for tracking and auditing, because policy
+    changes stay explicit and historical policy objects still exist
+
 - **Admin capability for policy creation**
   - instead of relying only on integrator-level admin gating
 
