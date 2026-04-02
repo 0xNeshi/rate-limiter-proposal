@@ -47,6 +47,9 @@ const EInvalidPolicy: vector<u8> = "Invalid policy";
 /// On its own, creating a `Policy<Tag>` does not make that policy authoritative for any protocol.
 /// A protocol still needs its own rule for deciding which policy is active. In the examples, that
 /// rule is implemented by storing the active policy id inside the integrating object.
+///
+/// NOTE: we're considering removing `store`, and exposing a way to "freeze" the object from within
+/// the module.
 public struct Policy<phantom Tag> has key, store {
     id: UID,
     version: u16,
@@ -81,6 +84,9 @@ public struct Registry<phantom Tag> has key, store {
 /// `State<Tag>` exists separately from `Policy<Tag>` because the rules change much less often than
 /// live usage does. The policy stays stable and easy to audit, while the state absorbs frequent
 /// refill and consumption updates.
+///
+/// Has `store` ability, because it allows the type to be embedded in other objects.
+/// The benefit of this is visible in the `mage_game`, where this type is used to track Mage's mana.
 public struct State<phantom Tag> has key, store {
     id: UID,
     policy_id: ID,
