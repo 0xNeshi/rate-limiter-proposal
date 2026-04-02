@@ -1,0 +1,9 @@
+[package]
+name = "integrator_scope"
+edition = "2024"
+
+[dependencies]
+library_scope = { local = "../library_scope" }
+
+[addresses]
+integrator_scope = "0x0"

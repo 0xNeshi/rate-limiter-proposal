@@ -1,6 +1,0 @@
-[package]
-name = "token_bucket"
-edition = "2024"
-
-[addresses]
-token_bucket = "0x0"

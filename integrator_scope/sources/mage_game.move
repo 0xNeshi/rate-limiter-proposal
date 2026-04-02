@@ -1,7 +1,7 @@
-module token_bucket::mage_game;
+module integrator_scope::mage_game;
 
+use library_scope::token_bucket;
 use sui::clock::Clock;
-use token_bucket::token_bucket;
 
 const EXPELIARMUS_COST: u64 = 10;
 const CRUCIO_COST: u64 = 20;

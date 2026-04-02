@@ -1,12 +1,12 @@
 #[test_only]
-module token_bucket::vault_tests;
+module integrator_scope::vault_tests;
 
+use integrator_scope::vault;
+use library_scope::token_bucket;
 use std::unit_test::assert_eq;
 use sui::clock;
 use sui::coin;
 use sui::test_scenario;
-use token_bucket::token_bucket;
-use token_bucket::vault;
 
 #[test]
 fun vault_users_share_one_global_bucket() {

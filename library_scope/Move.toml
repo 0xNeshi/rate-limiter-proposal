@@ -1,0 +1,6 @@
+[package]
+name = "library_scope"
+edition = "2024"
+
+[addresses]
+library_scope = "0x0"

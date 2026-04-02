@@ -1,4 +1,4 @@
-module token_bucket::token_bucket;
+module library_scope::token_bucket;
 
 use std::bcs;
 use sui::clock::Clock;

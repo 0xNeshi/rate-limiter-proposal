@@ -1,10 +1,10 @@
-module token_bucket::vault;
+module integrator_scope::vault;
 
+use library_scope::token_bucket;
 use sui::balance::{Self as balance, Balance};
 use sui::clock::Clock;
 use sui::coin::{Self as coin, Coin};
 use sui::sui::SUI;
-use token_bucket::token_bucket;
 
 #[error(code = 0)]
 const EInsufficientVaultBalance: vector<u8> = "Insufficient vault balance";

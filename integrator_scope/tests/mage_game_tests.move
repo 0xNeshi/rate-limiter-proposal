@@ -1,11 +1,11 @@
 #[test_only]
-module token_bucket::mage_game_tests;
+module integrator_scope::mage_game_tests;
 
+use integrator_scope::mage_game;
+use library_scope::token_bucket;
 use std::unit_test::assert_eq;
 use sui::clock;
 use sui::test_scenario;
-use token_bucket::mage_game;
-use token_bucket::token_bucket;
 
 #[test]
 fun mages_have_independent_mana_and_regenerate_over_time() {
