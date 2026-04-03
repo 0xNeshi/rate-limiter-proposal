@@ -123,8 +123,8 @@ public fun remaining_capacity(
     state: &token_bucket::State<WithdrawTag>,
     clock: &Clock,
 ): u64 {
-    assert_active_policy(self, policy);
-    assert_state(self, state);
+    assert_active_policy!(self, policy);
+    assert_state!(self, state);
     token_bucket::available(policy, state, clock)
 }
 
@@ -145,8 +145,8 @@ public fun withdraw(
     clock: &Clock,
     ctx: &mut TxContext,
 ): Coin<SUI> {
-    assert_active_policy(self, policy);
-    assert_state(self, state);
+    assert_active_policy!(self, policy);
+    assert_state!(self, state);
     token_bucket::consume_or_abort(policy, state, amount, clock);
     withdraw_unchecked(self, amount, ctx)
 }
@@ -171,9 +171,9 @@ public fun update_policy(
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
-    assert_admin(self, ctx);
-    assert_active_policy(self, current_policy);
-    assert_state(self, state);
+    assert_admin!(self, ctx);
+    assert_active_policy!(self, current_policy);
+    assert_state!(self, state);
 
     let next_policy = token_bucket::create_policy<WithdrawTag>(
         next_version,
@@ -223,14 +223,20 @@ public fun destroy_empty_for_testing(self: Vault) {
     object::delete(id);
 }
 
-fun assert_admin(self: &Vault, ctx: &TxContext) {
+macro fun assert_admin($self: &Vault, $ctx: &TxContext) {
+    let self = $self;
+    let ctx = $ctx;
     assert!(self.admin == tx_context::sender(ctx), ENotAdmin);
 }
 
-fun assert_active_policy(self: &Vault, policy: &token_bucket::Policy<WithdrawTag>) {
+macro fun assert_active_policy($self: &Vault, $policy: &token_bucket::Policy<WithdrawTag>) {
+    let self = $self;
+    let policy = $policy;
     assert!(self.policy_id == object::id(policy), EWrongPolicy);
 }
 
-fun assert_state(self: &Vault, state: &token_bucket::State<WithdrawTag>) {
+macro fun assert_state($self: &Vault, $state: &token_bucket::State<WithdrawTag>) {
+    let self = $self;
+    let state = $state;
     assert!(self.state_id == object::id(state), EWrongState);
 }
