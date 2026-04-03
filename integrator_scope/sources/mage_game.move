@@ -22,13 +22,7 @@
 ///    mages must call `update_mage_policy` before they can keep casting under the new rules.
 module integrator_scope::mage_game;
 
-use library_scope::token_bucket::{
-    Self,
-    available,
-    claim_object_state,
-    consume_or_abort,
-    migrate_state
-};
+use library_scope::token_bucket;
 use sui::clock::Clock;
 
 const EXPELIARMUS_COST: u64 = 10;
