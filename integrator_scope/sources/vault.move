@@ -16,7 +16,13 @@
 ///    the same shared state immediately because there is only one active limiter state to update.
 module integrator_scope::vault;
 
-use library_scope::token_bucket::{Self, available, claim_global_state, consume_or_abort, migrate_state};
+use library_scope::token_bucket::{
+    Self,
+    available,
+    claim_global_state,
+    consume_or_abort,
+    migrate_state
+};
 use sui::balance::Balance;
 use sui::clock::Clock;
 use sui::coin::{Self, Coin};
