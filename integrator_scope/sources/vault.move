@@ -16,10 +16,10 @@
 ///    the same shared state immediately because there is only one active limiter state to update.
 module integrator_scope::vault;
 
-use library_scope::token_bucket;
-use sui::balance::{Self as balance, Balance};
+use library_scope::token_bucket::{Self, available, claim_global_state, consume_or_abort, migrate_state};
+use sui::balance::Balance;
 use sui::clock::Clock;
-use sui::coin::{Self as coin, Coin};
+use sui::coin::{Self, Coin};
 use sui::sui::SUI;
 
 #[error(code = 0)]
@@ -79,15 +79,15 @@ public fun create_and_share(
         ctx,
     );
     let mut registry = token_bucket::create_registry<WithdrawTag>(ctx);
-    let state = token_bucket::claim_global_state(&mut registry, &policy, clock);
+    let state = registry.claim_global_state(&policy, clock);
 
     let vault = Vault {
         id: object::new(ctx),
-        admin: tx_context::sender(ctx),
+        admin: ctx.sender(),
         policy_id: object::id(&policy),
         registry_id: object::id(&registry),
         state_id: object::id(&state),
-        balance: coin::into_balance(initial_coin),
+        balance: initial_coin.into_balance(),
     };
 
     transfer::share_object(vault);
@@ -101,12 +101,12 @@ public fun create_and_share(
 /// Deposits only change the vault balance. They do not interact with the rate limiter because the
 /// limiter in this example is defined over withdrawals, not inflows.
 public fun deposit(self: &mut Vault, deposit_coin: Coin<SUI>) {
-    balance::join(&mut self.balance, coin::into_balance(deposit_coin));
+    self.balance.join(deposit_coin.into_balance());
 }
 
 /// Current SUI balance held by the vault.
 public fun value(self: &Vault): u64 {
-    balance::value(&self.balance)
+    self.balance.value()
 }
 
 /// Read the current remaining withdrawal capacity of the shared bucket.
@@ -125,7 +125,7 @@ public fun remaining_capacity(
 ): u64 {
     assert_active_policy!(self, policy);
     assert_state!(self, state);
-    token_bucket::available(policy, state, clock)
+    policy.available(state, clock)
 }
 
 /// Withdraw from the vault while consuming from the single global token bucket state.
@@ -147,8 +147,8 @@ public fun withdraw(
 ): Coin<SUI> {
     assert_active_policy!(self, policy);
     assert_state!(self, state);
-    token_bucket::consume_or_abort(policy, state, amount, clock);
-    withdraw_unchecked(self, amount, ctx)
+    policy.consume_or_abort(state, amount, clock);
+    self.withdraw_unchecked(amount, ctx)
 }
 
 /// Admin-only policy rotation.
@@ -182,7 +182,7 @@ public fun update_policy(
         next_refill_interval_ms,
         ctx,
     );
-    token_bucket::migrate_state(current_policy, &next_policy, state, clock);
+    current_policy.migrate_state(&next_policy, state, clock);
     self.policy_id = object::id(&next_policy);
     transfer::public_freeze_object(next_policy);
 }
@@ -204,8 +204,8 @@ public fun admin(self: &Vault): address {
 }
 
 public fun withdraw_unchecked(self: &mut Vault, amount: u64, ctx: &mut TxContext): Coin<SUI> {
-    assert!(balance::value(&self.balance) >= amount, EInsufficientVaultBalance);
-    coin::from_balance(balance::split(&mut self.balance, amount), ctx)
+    assert!(self.balance.value() >= amount, EInsufficientVaultBalance);
+    coin::from_balance(self.balance.split(amount), ctx)
 }
 
 #[test_only]
@@ -218,15 +218,15 @@ public fun destroy_empty_for_testing(self: Vault) {
         state_id: _,
         balance,
     } = self;
-    assert!(balance::value(&balance) == 0, EInsufficientVaultBalance);
-    balance::destroy_zero(balance);
+    assert!(balance.value() == 0, EInsufficientVaultBalance);
+    balance.destroy_zero();
     object::delete(id);
 }
 
 macro fun assert_admin($self: &Vault, $ctx: &TxContext) {
     let self = $self;
     let ctx = $ctx;
-    assert!(self.admin == tx_context::sender(ctx), ENotAdmin);
+    assert!(self.admin == ctx.sender(), ENotAdmin);
 }
 
 macro fun assert_active_policy($self: &Vault, $policy: &token_bucket::Policy<WithdrawTag>) {

@@ -22,7 +22,7 @@
 ///    mages must call `update_mage_policy` before they can keep casting under the new rules.
 module integrator_scope::mage_game;
 
-use library_scope::token_bucket;
+use library_scope::token_bucket::{Self, available, claim_object_state, consume_or_abort, migrate_state};
 use sui::clock::Clock;
 
 const EXPELIARMUS_COST: u64 = 10;
@@ -95,7 +95,7 @@ public fun create_and_share(
     let registry = token_bucket::create_registry<ManaTag>(ctx);
     let game = Game {
         id: object::new(ctx),
-        admin: tx_context::sender(ctx),
+        admin: ctx.sender(),
         active_policy_id: object::id(&policy),
         registry_id: object::id(&registry),
     };
@@ -126,8 +126,7 @@ public fun create_mage(
     assert!(game.registry_id == object::id(registry), EWrongPolicy);
 
     let mage_id = object::new(ctx);
-    let mana = token_bucket::claim_object_state(
-        registry,
+    let mana = registry.claim_object_state(
         active_policy,
         mage_id.to_inner(),
         clock,
@@ -135,7 +134,7 @@ public fun create_mage(
 
     Mage {
         id: mage_id,
-        owner: tx_context::sender(ctx),
+        owner: ctx.sender(),
         mana,
     }
 }
@@ -156,11 +155,11 @@ public fun update_mage_policy(
     latest_policy: &token_bucket::Policy<ManaTag>,
     mage: &mut Mage,
     clock: &Clock,
-    ctx: &TxContext,
+    ctx: &mut TxContext,
 ) {
     assert_owner!(mage, ctx);
     assert!(game.active_policy_id == object::id(latest_policy), EWrongPolicy);
-    token_bucket::migrate_state(current_policy, latest_policy, &mut mage.mana, clock);
+    current_policy.migrate_state(latest_policy, &mut mage.mana, clock);
 }
 
 /// Admin-only policy rotation.
@@ -204,9 +203,9 @@ public fun cast_expeliarmus(
     active_policy: &token_bucket::Policy<ManaTag>,
     mage: &mut Mage,
     clock: &Clock,
-    ctx: &TxContext,
+    ctx: &mut TxContext,
 ) {
-    cast_spell(game, active_policy, mage, EXPELIARMUS_COST, clock, ctx)
+    game.cast_spell(active_policy, mage, EXPELIARMUS_COST, clock, ctx)
 }
 
 /// Cast a medium-cost spell using the mage's current mana state.
@@ -218,9 +217,9 @@ public fun cast_crucio(
     active_policy: &token_bucket::Policy<ManaTag>,
     mage: &mut Mage,
     clock: &Clock,
-    ctx: &TxContext,
+    ctx: &mut TxContext,
 ) {
-    cast_spell(game, active_policy, mage, CRUCIO_COST, clock, ctx)
+    game.cast_spell(active_policy, mage, CRUCIO_COST, clock, ctx)
 }
 
 /// Cast a high-cost spell using the mage's current mana state.
@@ -232,9 +231,9 @@ public fun cast_avada_kedavra(
     active_policy: &token_bucket::Policy<ManaTag>,
     mage: &mut Mage,
     clock: &Clock,
-    ctx: &TxContext,
+    ctx: &mut TxContext,
 ) {
-    cast_spell(game, active_policy, mage, AVADA_KEDAVRA_COST, clock, ctx)
+    game.cast_spell(active_policy, mage, AVADA_KEDAVRA_COST, clock, ctx)
 }
 
 /// Read the mage's currently available mana under the game's active policy.
@@ -250,8 +249,8 @@ public fun mana(
     clock: &Clock,
 ): u64 {
     assert_active_policy!(game, active_policy);
-    assert!(token_bucket::state_policy_id(&mage.mana) == game.active_policy_id, EStaleMagePolicy);
-    token_bucket::available(active_policy, &mage.mana, clock)
+    assert!(mage.mana.state_policy_id() == game.active_policy_id, EStaleMagePolicy);
+    active_policy.available(&mage.mana, clock)
 }
 
 public fun owner(mage: &Mage): address {
@@ -267,21 +266,21 @@ public fun registry_id(game: &Game): ID {
 }
 
 public fun mana_policy_id(mage: &Mage): ID {
-    token_bucket::state_policy_id(&mage.mana)
+    mage.mana.state_policy_id()
 }
 
 public fun stored_mana(mage: &Mage): u64 {
-    token_bucket::stored_tokens(&mage.mana)
+    mage.mana.stored_tokens()
 }
 
 public fun mana_scope_kind(mage: &Mage): u8 {
-    token_bucket::scope_kind(&mage.mana)
+    mage.mana.scope_kind()
 }
 
 #[test_only]
 public fun destroy_mage_for_testing(mage: Mage) {
     let Mage { id, owner: _, mana } = mage;
-    token_bucket::destroy_state_for_testing(mana);
+    mana.destroy_state_for_testing();
     object::delete(id);
 }
 
@@ -295,20 +294,20 @@ fun cast_spell(
 ) {
     assert_owner!(mage, ctx);
     assert_active_policy!(game, active_policy);
-    assert!(token_bucket::state_policy_id(&mage.mana) == game.active_policy_id, EStaleMagePolicy);
-    token_bucket::consume_or_abort(active_policy, &mut mage.mana, mana_cost, clock);
+    assert!(mage.mana.state_policy_id() == game.active_policy_id, EStaleMagePolicy);
+    active_policy.consume_or_abort(&mut mage.mana, mana_cost, clock);
 }
 
 macro fun assert_admin($game: &Game, $ctx: &TxContext) {
     let game = $game;
     let ctx = $ctx;
-    assert!(game.admin == tx_context::sender(ctx), ENotAdmin);
+    assert!(game.admin == ctx.sender(), ENotAdmin);
 }
 
 macro fun assert_owner($mage: &Mage, $ctx: &TxContext) {
     let mage = $mage;
     let ctx = $ctx;
-    assert!(mage.owner == tx_context::sender(ctx), ENotMageOwner);
+    assert!(mage.owner == ctx.sender(), ENotMageOwner);
 }
 
 macro fun assert_active_policy($game: &Game, $policy: &token_bucket::Policy<ManaTag>) {
