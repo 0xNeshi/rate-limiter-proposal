@@ -236,8 +236,8 @@ public fun claim_object_state<Tag>(
 /// Integrators usually pair this with their own "is this the active policy/state for my product?"
 /// checks before surfacing the result to end users.
 public fun available<Tag>(policy: &Policy<Tag>, state: &State<Tag>, clock: &Clock): u64 {
-    assert_policy(policy, state);
-    let (_, tokens) = current_bucket(policy, state, clock.timestamp_ms());
+    assert_policy!(policy, state);
+    let (_, tokens) = policy.current_bucket(state, clock.timestamp_ms());
     tokens
 }
 
@@ -258,9 +258,9 @@ public fun consume_or_abort<Tag>(
     clock: &Clock,
 ) {
     assert!(policy.enabled, EPolicyDisabled);
-    assert_policy(policy, state);
+    assert_policy!(policy, state);
 
-    let (last_refill_ms, tokens) = current_bucket(policy, state, clock.timestamp_ms());
+    let (last_refill_ms, tokens) = policy.current_bucket(state, clock.timestamp_ms());
     assert!(tokens >= amount, ERateLimited);
 
     state.last_refill_ms = last_refill_ms;
@@ -286,10 +286,10 @@ public fun migrate_state<Tag>(
     clock: &Clock,
 ) {
     assert!(next_policy.enabled, EPolicyDisabled);
-    assert_policy(current_policy, state);
+    assert_policy!(current_policy, state);
 
     let now_ms = clock.timestamp_ms();
-    let (_, current_tokens) = current_bucket(current_policy, state, now_ms);
+    let (_, current_tokens) = current_policy.current_bucket(state, now_ms);
 
     state.policy_id = object::id(next_policy);
     state.last_refill_ms = now_ms;
@@ -376,7 +376,9 @@ public fun destroy_policy_for_testing<Tag>(policy: Policy<Tag>) {
     object::delete(id);
 }
 
-fun assert_policy<Tag>(policy: &Policy<Tag>, state: &State<Tag>) {
+macro fun assert_policy<$Tag>($policy: &Policy<$Tag>, $state: &State<$Tag>) {
+    let policy = $policy;
+    let state = $state;
     assert!(state.policy_id == object::id(policy), EPolicyMismatch);
 }
 
