@@ -24,7 +24,7 @@ fun mages_have_independent_mana_and_regenerate_over_time() {
     let game = test.take_shared<mage_game::Game>();
     let mut registry = test.take_shared<token_bucket::Registry<mage_game::ManaTag>>();
     let policy = test.take_immutable<token_bucket::Policy<mage_game::ManaTag>>();
-    let mage_a = mage_game::create_mage(&game, &mut registry, &policy, &clk, test.ctx());
+    let mage_a = game.create_mage(&mut registry, &policy, &clk, test.ctx());
     transfer::public_transfer(mage_a, player_a);
     test_scenario::return_shared(game);
     test_scenario::return_shared(registry);
@@ -35,7 +35,7 @@ fun mages_have_independent_mana_and_regenerate_over_time() {
     let game = test.take_shared<mage_game::Game>();
     let mut registry = test.take_shared<token_bucket::Registry<mage_game::ManaTag>>();
     let policy = test.take_immutable<token_bucket::Policy<mage_game::ManaTag>>();
-    let mage_b = mage_game::create_mage(&game, &mut registry, &policy, &clk, test.ctx());
+    let mage_b = game.create_mage(&mut registry, &policy, &clk, test.ctx());
     transfer::public_transfer(mage_b, player_b);
     test_scenario::return_shared(game);
     test_scenario::return_shared(registry);
@@ -46,8 +46,8 @@ fun mages_have_independent_mana_and_regenerate_over_time() {
     let game = test.take_shared<mage_game::Game>();
     let policy = test.take_immutable<token_bucket::Policy<mage_game::ManaTag>>();
     let mut mage_a = test.take_from_sender<mage_game::Mage>();
-    mage_game::cast_crucio(&game, &policy, &mut mage_a, &clk, test.ctx());
-    assert_eq!(mage_game::mana(&game, &policy, &mage_a, &clk), 10);
+    game.cast_crucio(&policy, &mut mage_a, &clk, test.ctx());
+    assert_eq!(game.mana(&policy, &mage_a, &clk), 10);
     test_scenario::return_to_sender(&test, mage_a);
     test_scenario::return_shared(game);
     test_scenario::return_immutable(policy);
@@ -57,8 +57,8 @@ fun mages_have_independent_mana_and_regenerate_over_time() {
     let game = test.take_shared<mage_game::Game>();
     let policy = test.take_immutable<token_bucket::Policy<mage_game::ManaTag>>();
     let mut mage_b = test.take_from_sender<mage_game::Mage>();
-    mage_game::cast_expeliarmus(&game, &policy, &mut mage_b, &clk, test.ctx());
-    assert_eq!(mage_game::mana(&game, &policy, &mage_b, &clk), 20);
+    game.cast_expeliarmus(&policy, &mut mage_b, &clk, test.ctx());
+    assert_eq!(game.mana(&policy, &mage_b, &clk), 20);
     test_scenario::return_to_sender(&test, mage_b);
     test_scenario::return_shared(game);
     test_scenario::return_immutable(policy);
@@ -71,7 +71,7 @@ fun mages_have_independent_mana_and_regenerate_over_time() {
     let game = test.take_shared<mage_game::Game>();
     let policy = test.take_immutable<token_bucket::Policy<mage_game::ManaTag>>();
     let mage_a = test.take_from_sender<mage_game::Mage>();
-    assert_eq!(mage_game::mana(&game, &policy, &mage_a, &clk), 20);
+    assert_eq!(game.mana(&policy, &mage_a, &clk), 20);
     test_scenario::return_to_sender(&test, mage_a);
     test_scenario::return_shared(game);
     test_scenario::return_immutable(policy);
@@ -81,7 +81,7 @@ fun mages_have_independent_mana_and_regenerate_over_time() {
     let game = test.take_shared<mage_game::Game>();
     let policy = test.take_immutable<token_bucket::Policy<mage_game::ManaTag>>();
     let mage_b = test.take_from_sender<mage_game::Mage>();
-    assert_eq!(mage_game::mana(&game, &policy, &mage_b, &clk), 30);
+    assert_eq!(game.mana(&policy, &mage_b, &clk), 30);
     test_scenario::return_to_sender(&test, mage_b);
     test_scenario::return_shared(game);
     test_scenario::return_immutable(policy);
@@ -107,7 +107,7 @@ fun mage_must_upgrade_to_latest_policy_before_casting() {
     let game = test.take_shared<mage_game::Game>();
     let mut registry = test.take_shared<token_bucket::Registry<mage_game::ManaTag>>();
     let policy = test.take_immutable<token_bucket::Policy<mage_game::ManaTag>>();
-    let mage_a = mage_game::create_mage(&game, &mut registry, &policy, &clk, test.ctx());
+    let mage_a = game.create_mage(&mut registry, &policy, &clk, test.ctx());
     transfer::public_transfer(mage_a, player_a);
     test_scenario::return_shared(game);
     test_scenario::return_shared(registry);
@@ -118,7 +118,7 @@ fun mage_must_upgrade_to_latest_policy_before_casting() {
     let game = test.take_shared<mage_game::Game>();
     let mut registry = test.take_shared<token_bucket::Registry<mage_game::ManaTag>>();
     let policy = test.take_immutable<token_bucket::Policy<mage_game::ManaTag>>();
-    let mage_b = mage_game::create_mage(&game, &mut registry, &policy, &clk, test.ctx());
+    let mage_b = game.create_mage(&mut registry, &policy, &clk, test.ctx());
     transfer::public_transfer(mage_b, player_b);
     test_scenario::return_shared(game);
     test_scenario::return_shared(registry);
@@ -129,8 +129,8 @@ fun mage_must_upgrade_to_latest_policy_before_casting() {
     let game = test.take_shared<mage_game::Game>();
     let policy = test.take_immutable<token_bucket::Policy<mage_game::ManaTag>>();
     let mut mage_a = test.take_from_sender<mage_game::Mage>();
-    mage_game::cast_crucio(&game, &policy, &mut mage_a, &clk, test.ctx());
-    let old_policy_id = mage_game::active_policy_id(&game);
+    game.cast_crucio(&policy, &mut mage_a, &clk, test.ctx());
+    let old_policy_id = game.active_policy_id();
     test_scenario::return_to_sender(&test, mage_a);
     test_scenario::return_shared(game);
     test_scenario::return_immutable(policy);
@@ -140,7 +140,7 @@ fun mage_must_upgrade_to_latest_policy_before_casting() {
     let game = test.take_shared<mage_game::Game>();
     let policy = test.take_immutable_by_id<token_bucket::Policy<mage_game::ManaTag>>(old_policy_id);
     let mut mage_b = test.take_from_sender<mage_game::Mage>();
-    mage_game::cast_expeliarmus(&game, &policy, &mut mage_b, &clk, test.ctx());
+    game.cast_expeliarmus(&policy, &mut mage_b, &clk, test.ctx());
     test_scenario::return_to_sender(&test, mage_b);
     test_scenario::return_shared(game);
     test_scenario::return_immutable(policy);
@@ -151,8 +151,8 @@ fun mage_must_upgrade_to_latest_policy_before_casting() {
     let current_policy = test.take_immutable_by_id<token_bucket::Policy<mage_game::ManaTag>>(
         old_policy_id,
     );
-    mage_game::update_policy(&mut game, &current_policy, 1, 40, 10, 10, test.ctx());
-    let new_policy_id = mage_game::active_policy_id(&game);
+    game.update_policy(&current_policy, 1, 40, 10, 10, test.ctx());
+    let new_policy_id = game.active_policy_id();
     test_scenario::return_shared(game);
     test_scenario::return_immutable(current_policy);
 
@@ -169,10 +169,10 @@ fun mage_must_upgrade_to_latest_policy_before_casting() {
         new_policy_id,
     );
     let mut mage_a = test.take_from_sender<mage_game::Mage>();
-    mage_game::update_mage_policy(&game, &old_policy, &new_policy, &mut mage_a, &clk, test.ctx());
-    assert_eq!(mage_game::mana(&game, &new_policy, &mage_a, &clk), 30);
-    mage_game::cast_avada_kedavra(&game, &new_policy, &mut mage_a, &clk, test.ctx());
-    assert_eq!(mage_game::mana(&game, &new_policy, &mage_a, &clk), 0);
+    game.update_mage_policy(&old_policy, &new_policy, &mut mage_a, &clk, test.ctx());
+    assert_eq!(game.mana(&new_policy, &mage_a, &clk), 30);
+    game.cast_avada_kedavra(&new_policy, &mut mage_a, &clk, test.ctx());
+    assert_eq!(game.mana(&new_policy, &mage_a, &clk), 0);
     test_scenario::return_to_sender(&test, mage_a);
     test_scenario::return_shared(game);
     test_scenario::return_immutable(old_policy);
@@ -185,7 +185,7 @@ fun mage_must_upgrade_to_latest_policy_before_casting() {
         new_policy_id,
     );
     let mut mage_b = test.take_from_sender<mage_game::Mage>();
-    mage_game::cast_expeliarmus(&game, &new_policy, &mut mage_b, &clk, test.ctx());
+    game.cast_expeliarmus(&new_policy, &mut mage_b, &clk, test.ctx());
     test_scenario::return_to_sender(&test, mage_b);
     test_scenario::return_shared(game);
     test_scenario::return_immutable(new_policy);
