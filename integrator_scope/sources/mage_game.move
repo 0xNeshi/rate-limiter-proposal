@@ -122,7 +122,7 @@ public fun create_mage(
     clock: &Clock,
     ctx: &mut TxContext,
 ): Mage {
-    assert_active_policy(game, active_policy);
+    assert_active_policy!(game, active_policy);
     assert!(game.registry_id == object::id(registry), EWrongPolicy);
 
     let mage_id = object::new(ctx);
@@ -158,7 +158,7 @@ public fun update_mage_policy(
     clock: &Clock,
     ctx: &TxContext,
 ) {
-    assert_owner(mage, ctx);
+    assert_owner!(mage, ctx);
     assert!(game.active_policy_id == object::id(latest_policy), EWrongPolicy);
     token_bucket::migrate_state(current_policy, latest_policy, &mut mage.mana, clock);
 }
@@ -181,8 +181,8 @@ public fun update_policy(
     next_refill_interval_ms: u64,
     ctx: &mut TxContext,
 ) {
-    assert_admin(game, ctx);
-    assert_active_policy(game, current_policy);
+    assert_admin!(game, ctx);
+    assert_active_policy!(game, current_policy);
 
     let next_policy = token_bucket::create_policy<ManaTag>(
         next_version,
@@ -249,7 +249,7 @@ public fun mana(
     mage: &Mage,
     clock: &Clock,
 ): u64 {
-    assert_active_policy(game, active_policy);
+    assert_active_policy!(game, active_policy);
     assert!(token_bucket::state_policy_id(&mage.mana) == game.active_policy_id, EStaleMagePolicy);
     token_bucket::available(active_policy, &mage.mana, clock)
 }
@@ -293,20 +293,26 @@ fun cast_spell(
     clock: &Clock,
     ctx: &TxContext,
 ) {
-    assert_owner(mage, ctx);
-    assert_active_policy(game, active_policy);
+    assert_owner!(mage, ctx);
+    assert_active_policy!(game, active_policy);
     assert!(token_bucket::state_policy_id(&mage.mana) == game.active_policy_id, EStaleMagePolicy);
     token_bucket::consume_or_abort(active_policy, &mut mage.mana, mana_cost, clock);
 }
 
-fun assert_admin(game: &Game, ctx: &TxContext) {
+macro fun assert_admin($game: &Game, $ctx: &TxContext) {
+    let game = $game;
+    let ctx = $ctx;
     assert!(game.admin == tx_context::sender(ctx), ENotAdmin);
 }
 
-fun assert_owner(mage: &Mage, ctx: &TxContext) {
+macro fun assert_owner($mage: &Mage, $ctx: &TxContext) {
+    let mage = $mage;
+    let ctx = $ctx;
     assert!(mage.owner == tx_context::sender(ctx), ENotMageOwner);
 }
 
-fun assert_active_policy(game: &Game, policy: &token_bucket::Policy<ManaTag>) {
+macro fun assert_active_policy($game: &Game, $policy: &token_bucket::Policy<ManaTag>) {
+    let game = $game;
+    let policy = $policy;
     assert!(game.active_policy_id == object::id(policy), EWrongPolicy);
 }
