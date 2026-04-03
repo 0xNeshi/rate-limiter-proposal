@@ -86,7 +86,7 @@ fun mages_have_independent_mana_and_regenerate_over_time() {
     test_scenario::return_shared(game);
     test_scenario::return_immutable(policy);
 
-    clock::destroy_for_testing(clk);
+    clk.destroy_for_testing();
     test.end();
 }
 
@@ -190,6 +190,6 @@ fun mage_must_upgrade_to_latest_policy_before_casting() {
     test_scenario::return_shared(game);
     test_scenario::return_immutable(new_policy);
 
-    clock::destroy_for_testing(clk);
+    clk.destroy_for_testing();
     test.end();
 }
