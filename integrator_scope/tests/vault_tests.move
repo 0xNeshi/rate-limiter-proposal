@@ -25,14 +25,14 @@ fun vault_users_share_one_global_bucket() {
     test.next_tx(user_a);
     let mut vault = test.take_shared<vault::Vault>();
     let deposit_a = coin::mint_for_testing<sui::sui::SUI>(80, test.ctx());
-    vault::deposit(&mut vault, deposit_a);
+    vault.deposit(deposit_a);
     test_scenario::return_shared(vault);
 
     // User B also funds the same shared vault.
     test.next_tx(user_b);
     let mut vault = test.take_shared<vault::Vault>();
     let deposit_b = coin::mint_for_testing<sui::sui::SUI>(40, test.ctx());
-    vault::deposit(&mut vault, deposit_b);
+    vault.deposit(deposit_b);
     test_scenario::return_shared(vault);
 
     // User A withdraws first and consumes most of the shared bucket.
@@ -40,13 +40,13 @@ fun vault_users_share_one_global_bucket() {
     let mut vault = test.take_shared<vault::Vault>();
     let policy = test.take_immutable<token_bucket::Policy<vault::WithdrawTag>>();
     let mut state = test.take_shared<token_bucket::State<vault::WithdrawTag>>();
-    let withdrawn_a = vault::withdraw(&mut vault, &policy, &mut state, 70, &clk, test.ctx());
+    let withdrawn_a = vault.withdraw(&policy, &mut state, 70, &clk, test.ctx());
 
-    assert_eq!(coin::value(&withdrawn_a), 70);
-    assert_eq!(vault::value(&vault), 50);
-    assert_eq!(vault::remaining_capacity(&vault, &policy, &state, &clk), 30);
+    assert_eq!(withdrawn_a.value(), 70);
+    assert_eq!(vault.value(), 50);
+    assert_eq!(vault.remaining_capacity(&policy, &state, &clk), 30);
 
-    coin::burn_for_testing(withdrawn_a);
+    withdrawn_a.burn_for_testing();
     test_scenario::return_shared(vault);
     test_scenario::return_shared(state);
     test_scenario::return_immutable(policy);
@@ -56,18 +56,18 @@ fun vault_users_share_one_global_bucket() {
     let mut vault = test.take_shared<vault::Vault>();
     let policy = test.take_immutable<token_bucket::Policy<vault::WithdrawTag>>();
     let mut state = test.take_shared<token_bucket::State<vault::WithdrawTag>>();
-    let withdrawn_b = vault::withdraw(&mut vault, &policy, &mut state, 20, &clk, test.ctx());
+    let withdrawn_b = vault.withdraw(&policy, &mut state, 20, &clk, test.ctx());
 
-    assert_eq!(coin::value(&withdrawn_b), 20);
-    assert_eq!(vault::value(&vault), 30);
-    assert_eq!(vault::remaining_capacity(&vault, &policy, &state, &clk), 10);
+    assert_eq!(withdrawn_b.value(), 20);
+    assert_eq!(vault.value(), 30);
+    assert_eq!(vault.remaining_capacity(&policy, &state, &clk), 10);
 
-    coin::burn_for_testing(withdrawn_b);
+    withdrawn_b.burn_for_testing();
     test_scenario::return_shared(vault);
     test_scenario::return_shared(state);
     test_scenario::return_immutable(policy);
 
-    clock::destroy_for_testing(clk);
+    clk.destroy_for_testing();
     test.end();
 }
 
@@ -88,14 +88,14 @@ fun vault_second_user_fails_after_global_capacity_is_consumed() {
     test.next_tx(user_a);
     let mut vault = test.take_shared<vault::Vault>();
     let deposit_a = coin::mint_for_testing<sui::sui::SUI>(60, test.ctx());
-    vault::deposit(&mut vault, deposit_a);
+    vault.deposit(deposit_a);
     test_scenario::return_shared(vault);
 
     // User B also deposits, but both users still share the same bucket.
     test.next_tx(user_b);
     let mut vault = test.take_shared<vault::Vault>();
     let deposit_b = coin::mint_for_testing<sui::sui::SUI>(40, test.ctx());
-    vault::deposit(&mut vault, deposit_b);
+    vault.deposit(deposit_b);
     test_scenario::return_shared(vault);
 
     // User A consumes the entire global withdrawal capacity.
@@ -103,8 +103,8 @@ fun vault_second_user_fails_after_global_capacity_is_consumed() {
     let mut vault = test.take_shared<vault::Vault>();
     let policy = test.take_immutable<token_bucket::Policy<vault::WithdrawTag>>();
     let mut state = test.take_shared<token_bucket::State<vault::WithdrawTag>>();
-    let first = vault::withdraw(&mut vault, &policy, &mut state, 50, &clk, test.ctx());
-    coin::burn_for_testing(first);
+    let first = vault.withdraw(&policy, &mut state, 50, &clk, test.ctx());
+    first.burn_for_testing();
     test_scenario::return_shared(vault);
     test_scenario::return_shared(state);
     test_scenario::return_immutable(policy);
@@ -114,13 +114,13 @@ fun vault_second_user_fails_after_global_capacity_is_consumed() {
     let mut vault = test.take_shared<vault::Vault>();
     let policy = test.take_immutable<token_bucket::Policy<vault::WithdrawTag>>();
     let mut state = test.take_shared<token_bucket::State<vault::WithdrawTag>>();
-    let failed = vault::withdraw(&mut vault, &policy, &mut state, 1, &clk, test.ctx());
-    coin::burn_for_testing(failed);
+    let failed = vault.withdraw(&policy, &mut state, 1, &clk, test.ctx());
+    failed.burn_for_testing();
 
     test_scenario::return_shared(vault);
     test_scenario::return_shared(state);
     test_scenario::return_immutable(policy);
-    clock::destroy_for_testing(clk);
+    clk.destroy_for_testing();
     test.end();
 }
 
@@ -140,7 +140,7 @@ fun vault_policy_update_reduces_available_capacity() {
     test.next_tx(user);
     let mut vault = test.take_shared<vault::Vault>();
     let deposit = coin::mint_for_testing<sui::sui::SUI>(100, test.ctx());
-    vault::deposit(&mut vault, deposit);
+    vault.deposit(deposit);
     test_scenario::return_shared(vault);
 
     // Confirm the original policy exposes the full initial capacity.
@@ -148,8 +148,8 @@ fun vault_policy_update_reduces_available_capacity() {
     let vault = test.take_shared<vault::Vault>();
     let policy = test.take_immutable<token_bucket::Policy<vault::WithdrawTag>>();
     let state = test.take_shared<token_bucket::State<vault::WithdrawTag>>();
-    assert_eq!(vault::remaining_capacity(&vault, &policy, &state, &clk), 100);
-    let old_policy_id = vault::active_policy_id(&vault);
+    assert_eq!(vault.remaining_capacity(&policy, &state, &clk), 100);
+    let old_policy_id = vault.active_policy_id();
     test_scenario::return_shared(vault);
     test_scenario::return_shared(state);
     test_scenario::return_immutable(policy);
@@ -161,8 +161,8 @@ fun vault_policy_update_reduces_available_capacity() {
         old_policy_id,
     );
     let mut state = test.take_shared<token_bucket::State<vault::WithdrawTag>>();
-    vault::update_policy(&mut vault, &current_policy, &mut state, 1, 40, 10, 10, &clk, test.ctx());
-    let new_policy_id = vault::active_policy_id(&vault);
+    vault.update_policy(&current_policy, &mut state, 1, 40, 10, 10, &clk, test.ctx());
+    let new_policy_id = vault.active_policy_id();
 
     test_scenario::return_shared(vault);
     test_scenario::return_shared(state);
@@ -174,16 +174,16 @@ fun vault_policy_update_reduces_available_capacity() {
     let policy = test.take_immutable_by_id<token_bucket::Policy<vault::WithdrawTag>>(new_policy_id);
     let mut state = test.take_shared<token_bucket::State<vault::WithdrawTag>>();
 
-    assert_eq!(vault::remaining_capacity(&vault, &policy, &state, &clk), 40);
-    let withdrawn = vault::withdraw(&mut vault, &policy, &mut state, 40, &clk, test.ctx());
-    assert_eq!(coin::value(&withdrawn), 40);
-    assert_eq!(vault::remaining_capacity(&vault, &policy, &state, &clk), 0);
+    assert_eq!(vault.remaining_capacity(&policy, &state, &clk), 40);
+    let withdrawn = vault.withdraw(&policy, &mut state, 40, &clk, test.ctx());
+    assert_eq!(withdrawn.value(), 40);
+    assert_eq!(vault.remaining_capacity(&policy, &state, &clk), 0);
 
-    coin::burn_for_testing(withdrawn);
+    withdrawn.burn_for_testing();
     test_scenario::return_shared(vault);
     test_scenario::return_shared(state);
     test_scenario::return_immutable(policy);
 
-    clock::destroy_for_testing(clk);
+    clk.destroy_for_testing();
     test.end();
 }
