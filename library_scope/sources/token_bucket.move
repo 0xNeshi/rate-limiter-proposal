@@ -293,7 +293,7 @@ public fun migrate_state<Tag>(
 
     state.policy_id = object::id(next_policy);
     state.last_refill_ms = now_ms;
-    state.tokens = min(current_tokens, next_policy.capacity);
+    state.tokens = current_tokens.min(next_policy.capacity);
 }
 
 public fun version<Tag>(policy: &Policy<Tag>): u16 {
@@ -394,11 +394,7 @@ fun current_bucket<Tag>(policy: &Policy<Tag>, state: &State<Tag>, now_ms: u64): 
     };
 
     let refilled_tokens = refill_steps * policy.refill_amount;
-    let tokens = min(policy.capacity, state.tokens + refilled_tokens);
+    let tokens = policy.capacity.min(state.tokens + refilled_tokens);
     let last_refill_ms = state.last_refill_ms + refill_steps * policy.refill_interval_ms;
     (last_refill_ms, tokens)
-}
-
-fun min(a: u64, b: u64): u64 {
-    if (a <= b) a else b
 }
