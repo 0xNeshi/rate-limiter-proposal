@@ -22,6 +22,8 @@ use sui::clock::Clock;
 use sui::coin::{Self, Coin};
 use sui::sui::SUI;
 
+// === Errors ===
+
 #[error(code = 0)]
 const EInsufficientVaultBalance: vector<u8> = "Insufficient vault balance";
 #[error(code = 1)]
@@ -30,6 +32,8 @@ const EWrongPolicy: vector<u8> = "Wrong policy";
 const EWrongState: vector<u8> = "Wrong state";
 #[error(code = 3)]
 const ENotAdmin: vector<u8> = "Only the vault admin can do this";
+
+// === Structs ===
 
 /// Shared vault example that uses one global token bucket for all withdrawals.
 ///
@@ -51,6 +55,8 @@ public struct Vault has key, store {
 
 /// Tag used to separate the vault withdrawal limiter from any other domain.
 public struct WithdrawTag has copy, drop, store {}
+
+// === Public Functions ===
 
 /// Create the vault and fully initialize its token bucket objects in one transaction.
 ///
@@ -187,6 +193,8 @@ public fun update_policy(
     transfer::public_freeze_object(next_policy);
 }
 
+// === View Helpers ===
+
 public fun active_policy_id(self: &Vault): ID {
     self.policy_id
 }
@@ -208,20 +216,7 @@ public fun withdraw_unchecked(self: &mut Vault, amount: u64, ctx: &mut TxContext
     coin::from_balance(self.balance.split(amount), ctx)
 }
 
-#[test_only]
-public fun destroy_empty_for_testing(self: Vault) {
-    let Vault {
-        id,
-        admin: _,
-        policy_id: _,
-        registry_id: _,
-        state_id: _,
-        balance,
-    } = self;
-    assert!(balance.value() == 0, EInsufficientVaultBalance);
-    balance.destroy_zero();
-    object::delete(id);
-}
+// === Private Functions ===
 
 macro fun assert_admin($self: &Vault, $ctx: &TxContext) {
     let self = $self;
@@ -239,4 +234,21 @@ macro fun assert_state($self: &Vault, $state: &token_bucket::State<WithdrawTag>)
     let self = $self;
     let state = $state;
     assert!(self.state_id == object::id(state), EWrongState);
+}
+
+// === Test-Only Helpers ===
+
+#[test_only]
+public fun destroy_empty_for_testing(self: Vault) {
+    let Vault {
+        id,
+        admin: _,
+        policy_id: _,
+        registry_id: _,
+        state_id: _,
+        balance,
+    } = self;
+    assert!(balance.value() == 0, EInsufficientVaultBalance);
+    balance.destroy_zero();
+    id.delete();
 }

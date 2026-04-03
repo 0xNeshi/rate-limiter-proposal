@@ -22,9 +22,7 @@ use std::bcs;
 use sui::clock::Clock;
 use sui::derived_object;
 
-const SCOPE_KIND_GLOBAL: u8 = 0;
-const SCOPE_KIND_ADDRESS: u8 = 1;
-const SCOPE_KIND_OBJECT: u8 = 2;
+// === Errors ===
 
 #[error(code = 0)]
 const EPolicyMismatch: vector<u8> = "Policy mismatch";
@@ -34,6 +32,14 @@ const ERateLimited: vector<u8> = "Rate limited";
 const EPolicyDisabled: vector<u8> = "Policy disabled";
 #[error(code = 3)]
 const EInvalidPolicy: vector<u8> = "Invalid policy";
+
+// === Constants ===
+
+const SCOPE_KIND_GLOBAL: u8 = 0;
+const SCOPE_KIND_ADDRESS: u8 = 1;
+const SCOPE_KIND_OBJECT: u8 = 2;
+
+// === Structs ===
 
 /// Immutable token bucket configuration.
 ///
@@ -95,6 +101,8 @@ public struct State<phantom Tag> has key, store {
     last_refill_ms: u64,
     tokens: u64,
 }
+
+// === Public Functions ===
 
 /// Create a new immutable token bucket policy.
 ///
@@ -296,6 +304,8 @@ public fun migrate_state<Tag>(
     state.tokens = current_tokens.min(next_policy.capacity);
 }
 
+// === View Helpers ===
+
 public fun version<Tag>(policy: &Policy<Tag>): u16 {
     policy.version
 }
@@ -344,37 +354,7 @@ public fun last_refill_ms<Tag>(state: &State<Tag>): u64 {
     state.last_refill_ms
 }
 
-#[test_only]
-public fun destroy_state_for_testing<Tag>(state: State<Tag>) {
-    let State {
-        id,
-        policy_id: _,
-        scope_kind: _,
-        scope_key_hash: _,
-        last_refill_ms: _,
-        tokens: _,
-    } = state;
-    object::delete(id);
-}
-
-#[test_only]
-public fun destroy_registry_for_testing<Tag>(registry: Registry<Tag>) {
-    let Registry { id } = registry;
-    object::delete(id);
-}
-
-#[test_only]
-public fun destroy_policy_for_testing<Tag>(policy: Policy<Tag>) {
-    let Policy {
-        id,
-        version: _,
-        capacity: _,
-        refill_amount: _,
-        refill_interval_ms: _,
-        enabled: _,
-    } = policy;
-    object::delete(id);
-}
+// === Private Functions ===
 
 macro fun assert_policy<$Tag>($policy: &Policy<$Tag>, $state: &State<$Tag>) {
     let policy = $policy;
@@ -397,4 +377,38 @@ fun current_bucket<Tag>(policy: &Policy<Tag>, state: &State<Tag>, now_ms: u64): 
     let tokens = policy.capacity.min(state.tokens + refilled_tokens);
     let last_refill_ms = state.last_refill_ms + refill_steps * policy.refill_interval_ms;
     (last_refill_ms, tokens)
+}
+
+// === Test-Only Helpers ===
+
+#[test_only]
+public fun destroy_state_for_testing<Tag>(state: State<Tag>) {
+    let State {
+        id,
+        policy_id: _,
+        scope_kind: _,
+        scope_key_hash: _,
+        last_refill_ms: _,
+        tokens: _,
+    } = state;
+    id.delete();
+}
+
+#[test_only]
+public fun destroy_registry_for_testing<Tag>(registry: Registry<Tag>) {
+    let Registry { id } = registry;
+    id.delete();
+}
+
+#[test_only]
+public fun destroy_policy_for_testing<Tag>(policy: Policy<Tag>) {
+    let Policy {
+        id,
+        version: _,
+        capacity: _,
+        refill_amount: _,
+        refill_interval_ms: _,
+        enabled: _,
+    } = policy;
+    id.delete();
 }

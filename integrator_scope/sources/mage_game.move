@@ -25,9 +25,7 @@ module integrator_scope::mage_game;
 use library_scope::token_bucket;
 use sui::clock::Clock;
 
-const EXPELIARMUS_COST: u64 = 10;
-const CRUCIO_COST: u64 = 20;
-const AVADA_KEDAVRA_COST: u64 = 30;
+// === Errors ===
 
 #[error(code = 0)]
 const ENotAdmin: vector<u8> = "Only the game admin can do this";
@@ -37,6 +35,14 @@ const EWrongPolicy: vector<u8> = "Wrong policy";
 const EStaleMagePolicy: vector<u8> = "Mage must be upgraded to the latest policy";
 #[error(code = 3)]
 const ENotMageOwner: vector<u8> = "Only the mage owner can do this";
+
+// === Constants ===
+
+const EXPELIARMUS_COST: u64 = 10;
+const CRUCIO_COST: u64 = 20;
+const AVADA_KEDAVRA_COST: u64 = 30;
+
+// === Structs ===
 
 /// Shared game object that points to the latest active mana policy and the shared registry.
 ///
@@ -68,6 +74,8 @@ public struct Mage has key, store {
 
 /// Tag separating the mana limiter domain from every other token bucket domain.
 public struct ManaTag has copy, drop, store {}
+
+// === Public Functions ===
 
 /// Create a game, a shared registry, and the first immutable mana policy.
 ///
@@ -236,6 +244,8 @@ public fun cast_avada_kedavra(
     game.cast_spell(active_policy, mage, AVADA_KEDAVRA_COST, clock, ctx)
 }
 
+// === View Helpers ===
+
 /// Read the mage's currently available mana under the game's active policy.
 ///
 /// This is the safe inspection path for gameplay or UI code because it verifies both that the game
@@ -277,12 +287,7 @@ public fun mana_scope_kind(mage: &Mage): u8 {
     mage.mana.scope_kind()
 }
 
-#[test_only]
-public fun destroy_mage_for_testing(mage: Mage) {
-    let Mage { id, owner: _, mana } = mage;
-    mana.destroy_state_for_testing();
-    object::delete(id);
-}
+// === Private Functions ===
 
 fun cast_spell(
     game: &Game,
@@ -314,4 +319,13 @@ macro fun assert_active_policy($game: &Game, $policy: &token_bucket::Policy<Mana
     let game = $game;
     let policy = $policy;
     assert!(game.active_policy_id == object::id(policy), EWrongPolicy);
+}
+
+// === Test-Only Helpers ===
+
+#[test_only]
+public fun destroy_mage_for_testing(mage: Mage) {
+    let Mage { id, owner: _, mana } = mage;
+    mana.destroy_state_for_testing();
+    id.delete();
 }
