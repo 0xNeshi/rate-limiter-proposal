@@ -8,12 +8,12 @@
 ///   references.
 ///
 /// The intended flow is:
-/// 1. the admin calls `create_and_share` once to create the shared vault, its withdrawal policy,
-///    one registry, and the single global limiter state,
+/// 1. the admin calls `create_and_share` once to create the shared vault, its first withdrawal
+///    policy, and the single global limiter state,
 /// 2. users can deposit freely, but every withdrawal consumes from that one shared state,
 /// 3. read paths such as `remaining_capacity` show the current shared headroom,
-/// 4. when the admin wants new withdrawal rules, `update_policy` creates a new policy and migrates
-///    the same shared state immediately because there is only one active limiter state to update.
+/// 4. when the admin wants new withdrawal rules, `update_policy` rotates the policy (carrying the
+///    claim registry forward) and migrates the same shared state immediately.
 module integrator_scope::vault;
 
 use library_scope::token_bucket;
@@ -42,13 +42,12 @@ const ENotAdmin: vector<u8> = "Only the vault admin can do this";
 /// shared state id so every execution path can verify it is consuming from the right limiter.
 ///
 /// This is the key integrator check in the example. Even if someone can create some separate
-/// `Policy<WithdrawTag>` through the library, it does not matter unless the vault itself recognizes
-/// that policy id as active.
+/// `Policy<WithdrawTag>` through the library, it does not matter unless the vault itself
+/// recognizes that policy id as active.
 public struct Vault has key, store {
     id: UID,
     admin: address,
     policy_id: ID,
-    registry_id: ID,
     state_id: ID,
     balance: Balance<SUI>,
 }
@@ -60,13 +59,14 @@ public struct WithdrawTag has copy, drop, store {}
 
 /// Create the vault and fully initialize its token bucket objects in one transaction.
 ///
-/// This is the one-time setup path for the example. It creates the withdrawal policy, the shared
-/// registry for the withdrawal domain, and the single global state that all later withdrawals will
-/// consume from, then publishes the resulting objects in their final shared or immutable form.
+/// This is the one-time setup path for the example. It creates the first withdrawal policy (which
+/// carries the domain's canonical claim registry) and the single global state that all later
+/// withdrawals will consume from, then publishes the resulting objects in their final shared
+/// form.
 ///
 /// Reviewers should read this as the moment where the generic library objects become the vault's
-/// official limiter. After this point, the vault's stored ids define which policy and state count as
-/// valid for end-user operations.
+/// official limiter. After this point, the vault's stored ids define which policy and state count
+/// as valid for end-user operations.
 #[allow(lint(share_owned))]
 public fun create_and_share(
     initial_coin: Coin<SUI>,
@@ -77,29 +77,26 @@ public fun create_and_share(
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
-    let policy = token_bucket::create_policy<WithdrawTag>(
+    let mut policy = token_bucket::create_policy<WithdrawTag>(
         version,
         capacity,
         refill_amount,
         refill_interval_ms,
         ctx,
     );
-    let mut registry = token_bucket::create_registry<WithdrawTag>(ctx);
-    let state = registry.claim_global_state(&policy, clock);
+    let state = policy.claim_global_state(clock);
 
     let vault = Vault {
         id: object::new(ctx),
         admin: ctx.sender(),
         policy_id: object::id(&policy),
-        registry_id: object::id(&registry),
         state_id: object::id(&state),
         balance: initial_coin.into_balance(),
     };
 
     transfer::share_object(vault);
-    transfer::public_share_object(registry);
     transfer::public_share_object(state);
-    transfer::public_freeze_object(policy);
+    transfer::public_share_object(policy);
 }
 
 /// Anyone can deposit into the shared vault.
@@ -120,9 +117,9 @@ public fun value(self: &Vault): u64 {
 /// This is the main read path for UIs, operators, or tests that want to inspect how much shared
 /// withdrawal headroom is currently left before attempting a withdrawal.
 ///
-/// The vault first checks that the supplied policy and state are the same objects it recognizes as
-/// current, so callers cannot present an arbitrary policy/state pair and ask the vault to treat it
-/// as authoritative.
+/// The vault first checks that the supplied policy and state are the same objects it recognizes
+/// as current, so callers cannot present an arbitrary policy/state pair and ask the vault to
+/// treat it as authoritative.
 public fun remaining_capacity(
     self: &Vault,
     policy: &token_bucket::Policy<WithdrawTag>,
@@ -141,8 +138,8 @@ public fun remaining_capacity(
 /// the vault balance. Because the state is global, every successful withdrawal reduces what later
 /// users can withdraw until time-based refill restores capacity.
 ///
-/// This is also why a user-created policy cannot bypass the vault's intended limit. The vault only
-/// accepts the specific policy id and state id it has stored as active.
+/// This is also why a user-created policy cannot bypass the vault's intended limit. The vault
+/// only accepts the specific policy id and state id it has stored as active.
 public fun withdraw(
     self: &mut Vault,
     policy: &token_bucket::Policy<WithdrawTag>,
@@ -161,14 +158,18 @@ public fun withdraw(
 ///
 /// The vault migrates its single shared state immediately because there is only one active
 /// limiter state for the whole vault. Reviewers should read this as the "strict but simple"
-/// rollout model: one new policy is created, one existing state is migrated, and all future
+/// rollout model: one new policy is produced, one existing state is migrated, and all future
 /// withdrawals begin using the new rules right away.
 ///
-/// The underlying library `create_policy` function is generic, but the vault only exposes policy
-/// creation to its admin through this flow. That is the integrator's job in this design.
+/// The claim registry is carried forward from the current policy to the new one via
+/// `token_bucket::rotate_policy`, so the vault's domain-wide uniqueness guarantee survives the
+/// rotation. The underlying library `create_policy` / `rotate_policy` functions are generic, but
+/// the vault only exposes policy creation to its admin through this flow. That is the
+/// integrator's job in this design.
+#[allow(lint(share_owned))]
 public fun update_policy(
     self: &mut Vault,
-    current_policy: &token_bucket::Policy<WithdrawTag>,
+    current_policy: &mut token_bucket::Policy<WithdrawTag>,
     state: &mut token_bucket::State<WithdrawTag>,
     next_version: u16,
     next_capacity: u64,
@@ -181,7 +182,8 @@ public fun update_policy(
     assert_active_policy!(self, current_policy);
     assert_state!(self, state);
 
-    let next_policy = token_bucket::create_policy<WithdrawTag>(
+    let next_policy = token_bucket::rotate_policy<WithdrawTag>(
+        current_policy,
         next_version,
         next_capacity,
         next_refill_amount,
@@ -190,17 +192,13 @@ public fun update_policy(
     );
     current_policy.migrate_state(&next_policy, state, clock);
     self.policy_id = object::id(&next_policy);
-    transfer::public_freeze_object(next_policy);
+    transfer::public_share_object(next_policy);
 }
 
 // === View Helpers ===
 
 public fun active_policy_id(self: &Vault): ID {
     self.policy_id
-}
-
-public fun registry_id(self: &Vault): ID {
-    self.registry_id
 }
 
 public fun state_id(self: &Vault): ID {
@@ -244,7 +242,6 @@ public fun destroy_empty_for_testing(self: Vault) {
         id,
         admin: _,
         policy_id: _,
-        registry_id: _,
         state_id: _,
         balance,
     } = self;

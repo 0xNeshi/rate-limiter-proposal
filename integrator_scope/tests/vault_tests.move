@@ -38,7 +38,7 @@ fun vault_users_share_one_global_bucket() {
     // User A withdraws first and consumes most of the shared bucket.
     test.next_tx(user_a);
     let mut vault = test.take_shared<vault::Vault>();
-    let policy = test.take_immutable<token_bucket::Policy<vault::WithdrawTag>>();
+    let policy = test.take_shared<token_bucket::Policy<vault::WithdrawTag>>();
     let mut state = test.take_shared<token_bucket::State<vault::WithdrawTag>>();
     let withdrawn_a = vault.withdraw(&policy, &mut state, 70, &clk, test.ctx());
 
@@ -49,12 +49,12 @@ fun vault_users_share_one_global_bucket() {
     withdrawn_a.burn_for_testing();
     test_scenario::return_shared(vault);
     test_scenario::return_shared(state);
-    test_scenario::return_immutable(policy);
+    test_scenario::return_shared(policy);
 
     // User B observes the reduced shared capacity and can only use what remains.
     test.next_tx(user_b);
     let mut vault = test.take_shared<vault::Vault>();
-    let policy = test.take_immutable<token_bucket::Policy<vault::WithdrawTag>>();
+    let policy = test.take_shared<token_bucket::Policy<vault::WithdrawTag>>();
     let mut state = test.take_shared<token_bucket::State<vault::WithdrawTag>>();
     let withdrawn_b = vault.withdraw(&policy, &mut state, 20, &clk, test.ctx());
 
@@ -65,7 +65,7 @@ fun vault_users_share_one_global_bucket() {
     withdrawn_b.burn_for_testing();
     test_scenario::return_shared(vault);
     test_scenario::return_shared(state);
-    test_scenario::return_immutable(policy);
+    test_scenario::return_shared(policy);
 
     clk.destroy_for_testing();
     test.end();
@@ -101,25 +101,25 @@ fun vault_second_user_fails_after_global_capacity_is_consumed() {
     // User A consumes the entire global withdrawal capacity.
     test.next_tx(user_a);
     let mut vault = test.take_shared<vault::Vault>();
-    let policy = test.take_immutable<token_bucket::Policy<vault::WithdrawTag>>();
+    let policy = test.take_shared<token_bucket::Policy<vault::WithdrawTag>>();
     let mut state = test.take_shared<token_bucket::State<vault::WithdrawTag>>();
     let first = vault.withdraw(&policy, &mut state, 50, &clk, test.ctx());
     first.burn_for_testing();
     test_scenario::return_shared(vault);
     test_scenario::return_shared(state);
-    test_scenario::return_immutable(policy);
+    test_scenario::return_shared(policy);
 
     // User B now fails because no shared capacity is left.
     test.next_tx(user_b);
     let mut vault = test.take_shared<vault::Vault>();
-    let policy = test.take_immutable<token_bucket::Policy<vault::WithdrawTag>>();
+    let policy = test.take_shared<token_bucket::Policy<vault::WithdrawTag>>();
     let mut state = test.take_shared<token_bucket::State<vault::WithdrawTag>>();
     let failed = vault.withdraw(&policy, &mut state, 1, &clk, test.ctx());
     failed.burn_for_testing();
 
     test_scenario::return_shared(vault);
     test_scenario::return_shared(state);
-    test_scenario::return_immutable(policy);
+    test_scenario::return_shared(policy);
     clk.destroy_for_testing();
     test.end();
 }
@@ -146,32 +146,32 @@ fun vault_policy_update_reduces_available_capacity() {
     // Confirm the original policy exposes the full initial capacity.
     test.next_tx(user);
     let vault = test.take_shared<vault::Vault>();
-    let policy = test.take_immutable<token_bucket::Policy<vault::WithdrawTag>>();
+    let policy = test.take_shared<token_bucket::Policy<vault::WithdrawTag>>();
     let state = test.take_shared<token_bucket::State<vault::WithdrawTag>>();
     assert_eq!(vault.remaining_capacity(&policy, &state, &clk), 100);
     let old_policy_id = vault.active_policy_id();
     test_scenario::return_shared(vault);
     test_scenario::return_shared(state);
-    test_scenario::return_immutable(policy);
+    test_scenario::return_shared(policy);
 
     // The admin rotates to a stricter policy and migrates the shared state immediately.
     test.next_tx(owner);
     let mut vault = test.take_shared<vault::Vault>();
-    let current_policy = test.take_immutable_by_id<token_bucket::Policy<vault::WithdrawTag>>(
+    let mut current_policy = test.take_shared_by_id<token_bucket::Policy<vault::WithdrawTag>>(
         old_policy_id,
     );
     let mut state = test.take_shared<token_bucket::State<vault::WithdrawTag>>();
-    vault.update_policy(&current_policy, &mut state, 1, 40, 10, 10, &clk, test.ctx());
+    vault.update_policy(&mut current_policy, &mut state, 1, 40, 10, 10, &clk, test.ctx());
     let new_policy_id = vault.active_policy_id();
 
     test_scenario::return_shared(vault);
     test_scenario::return_shared(state);
-    test_scenario::return_immutable(current_policy);
+    test_scenario::return_shared(current_policy);
 
     // The user now sees the reduced capacity under the new policy.
     test.next_tx(user);
     let mut vault = test.take_shared<vault::Vault>();
-    let policy = test.take_immutable_by_id<token_bucket::Policy<vault::WithdrawTag>>(new_policy_id);
+    let policy = test.take_shared_by_id<token_bucket::Policy<vault::WithdrawTag>>(new_policy_id);
     let mut state = test.take_shared<token_bucket::State<vault::WithdrawTag>>();
 
     assert_eq!(vault.remaining_capacity(&policy, &state, &clk), 40);
@@ -182,7 +182,7 @@ fun vault_policy_update_reduces_available_capacity() {
     withdrawn.burn_for_testing();
     test_scenario::return_shared(vault);
     test_scenario::return_shared(state);
-    test_scenario::return_immutable(policy);
+    test_scenario::return_shared(policy);
 
     clk.destroy_for_testing();
     test.end();

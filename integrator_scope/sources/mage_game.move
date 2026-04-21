@@ -13,10 +13,9 @@
 /// recent version.
 ///
 /// The intended flow is:
-/// 1. the admin calls `create_and_share` once to create the game, its registry, and the first mana
-///    policy,
-/// 2. players later call `create_mage`, which claims a fresh object-scoped mana state for each mage
-///    under the game's current policy,
+/// 1. the admin calls `create_and_share` once to create the game and the first mana policy,
+/// 2. players later call `create_mage`, which claims a fresh object-scoped mana state for each
+///    mage under the game's current policy,
 /// 3. gameplay calls such as `cast_*` consume from that mage's wrapped state only,
 /// 4. when the admin rotates policy, the game points to the new policy immediately but existing
 ///    mages must call `update_mage_policy` before they can keep casting under the new rules.
@@ -44,7 +43,7 @@ const AVADA_KEDAVRA_COST: u64 = 30;
 
 // === Structs ===
 
-/// Shared game object that points to the latest active mana policy and the shared registry.
+/// Shared game object that points to the latest active mana policy.
 ///
 /// The game is the integration-level source of truth for which policy new mages and current reads
 /// should use, but it does not directly hold each mage's mutable mana accounting.
@@ -55,7 +54,6 @@ public struct Game has key, store {
     id: UID,
     admin: address,
     active_policy_id: ID,
-    registry_id: ID,
 }
 
 /// Owned mage object with its own wrapped mana state.
@@ -77,11 +75,11 @@ public struct ManaTag has copy, drop, store {}
 
 // === Public Functions ===
 
-/// Create a game, a shared registry, and the first immutable mana policy.
+/// Create a game and the first mana policy.
 ///
 /// This is the one-time setup path for the example. It establishes the shared infrastructure for
-/// the mana domain, but it does not create any mage states yet because those are claimed later as
-/// players onboard individual mages.
+/// the mana domain, but it does not create any mage states yet because those are claimed later
+/// as players onboard individual mages.
 ///
 /// Reviewers should read this as the point where the game chooses its first official policy. From
 /// then on, end-user gameplay is expected to go through the game object, which decides what counts
@@ -100,45 +98,36 @@ public fun create_and_share(
         refill_interval_ms,
         ctx,
     );
-    let registry = token_bucket::create_registry<ManaTag>(ctx);
     let game = Game {
         id: object::new(ctx),
         admin: ctx.sender(),
         active_policy_id: object::id(&policy),
-        registry_id: object::id(&registry),
     };
 
     transfer::share_object(game);
-    transfer::public_share_object(registry);
-    transfer::public_freeze_object(policy);
+    transfer::public_share_object(policy);
 }
 
 /// Anyone can create a mage in the game.
 ///
-/// The mana state is claimed from the game's shared registry and starts full at the active
-/// policy capacity. This is the onboarding path for a mage: it binds a newly created mage to the
-/// game's current policy and gives that mage its own canonical state for all future casts and later
+/// The mana state is claimed from the game's active policy and starts full at the active policy
+/// capacity. This is the onboarding path for a mage: it binds a newly created mage to the game's
+/// current policy and gives that mage its own canonical state for all future casts and later
 /// migrations.
 ///
-/// Because the state is claimed from the game's registry and pinned to the game's active policy,
-/// this flow makes the intended creation path explicit instead of leaving each player to invent
-/// their own limiter state lifecycle.
+/// The policy carries the domain's canonical claim registry, so each mage object id can only ever
+/// claim one mana state, across every policy rotation. This flow makes the intended creation path
+/// explicit instead of leaving each player to invent their own limiter state lifecycle.
 public fun create_mage(
     game: &Game,
-    registry: &mut token_bucket::Registry<ManaTag>,
-    active_policy: &token_bucket::Policy<ManaTag>,
+    active_policy: &mut token_bucket::Policy<ManaTag>,
     clock: &Clock,
     ctx: &mut TxContext,
 ): Mage {
     assert_active_policy!(game, active_policy);
-    assert!(game.registry_id == object::id(registry), EWrongPolicy);
 
     let mage_id = object::new(ctx);
-    let mana = registry.claim_object_state(
-        active_policy,
-        mage_id.to_inner(),
-        clock,
-    );
+    let mana = active_policy.claim_object_state(mage_id.to_inner(), clock);
 
     Mage {
         id: mage_id,
@@ -150,13 +139,13 @@ public fun create_mage(
 /// Public path for a player to upgrade their mage to the latest game policy.
 ///
 /// The caller supplies the mage, its current policy, and the game's latest policy. The wrapped
-/// mana state is migrated explicitly so the policy change is observable. This is the staged rollout
-/// path of the example: after the game rotates policy, each returning mage upgrades itself before
-/// resuming normal gameplay under the new rules.
+/// mana state is migrated explicitly so the policy change is observable. This is the staged
+/// rollout path of the example: after the game rotates policy, each returning mage upgrades
+/// itself before resuming normal gameplay under the new rules.
 ///
 /// This is where the library-level `migrate_state` primitive becomes a protocol-approved end-user
-/// flow. The player is not choosing any arbitrary policy; the game still verifies that the proposed
-/// latest policy is the one it currently recognizes as active.
+/// flow. The player is not choosing any arbitrary policy; the game still verifies that the
+/// proposed latest policy is the one it currently recognizes as active.
 public fun update_mage_policy(
     game: &Game,
     current_policy: &token_bucket::Policy<ManaTag>,
@@ -172,16 +161,22 @@ public fun update_mage_policy(
 
 /// Admin-only policy rotation.
 ///
-/// Old immutable policies remain around so mages can be migrated explicitly later. Unlike the vault
-/// example, this function does not migrate all live state immediately; it only changes which policy
-/// the game considers current for new onboarding and future validated reads and casts.
+/// Old policies remain around so mages can be migrated explicitly later. Unlike the vault
+/// example, this function does not migrate all live state immediately; it only changes which
+/// policy the game considers current for new onboarding and future validated reads and casts.
 ///
-/// This is why a player cannot bypass the protocol's intended policy by creating some other policy
-/// object. The game only advances through this admin-controlled flow and later validates against the
-/// resulting active policy id.
+/// This is why a player cannot bypass the protocol's intended policy by creating some other
+/// policy object. The game only advances through this admin-controlled flow and later validates
+/// against the resulting active policy id.
+///
+/// The claim registry is carried forward from the current policy to the new one via
+/// `token_bucket::rotate_policy`, so domain-wide scope uniqueness is preserved: an existing mage
+/// cannot be re-claimed as a fresh full-capacity state under the new policy. Old policies stay
+/// usable as the source of `migrate_state` so returning mages can upgrade themselves.
+#[allow(lint(share_owned))]
 public fun update_policy(
     game: &mut Game,
-    current_policy: &token_bucket::Policy<ManaTag>,
+    current_policy: &mut token_bucket::Policy<ManaTag>,
     next_version: u16,
     next_capacity: u64,
     next_refill_amount: u64,
@@ -191,7 +186,8 @@ public fun update_policy(
     assert_admin!(game, ctx);
     assert_active_policy!(game, current_policy);
 
-    let next_policy = token_bucket::create_policy<ManaTag>(
+    let next_policy = token_bucket::rotate_policy<ManaTag>(
+        current_policy,
         next_version,
         next_capacity,
         next_refill_amount,
@@ -199,7 +195,7 @@ public fun update_policy(
         ctx,
     );
     game.active_policy_id = object::id(&next_policy);
-    transfer::public_freeze_object(next_policy);
+    transfer::public_share_object(next_policy);
 }
 
 /// Cast a low-cost spell using the mage's current mana state.
@@ -218,8 +214,8 @@ public fun cast_expeliarmus(
 
 /// Cast a medium-cost spell using the mage's current mana state.
 ///
-/// Like the other spell entry points, this only succeeds if the game still recognizes the supplied
-/// policy and the mage has already been migrated to it.
+/// Like the other spell entry points, this only succeeds if the game still recognizes the
+/// supplied policy and the mage has already been migrated to it.
 public fun cast_crucio(
     game: &Game,
     active_policy: &token_bucket::Policy<ManaTag>,
@@ -248,10 +244,12 @@ public fun cast_avada_kedavra(
 
 /// Read the mage's currently available mana under the game's active policy.
 ///
-/// This is the safe inspection path for gameplay or UI code because it verifies both that the game
-/// still points to the supplied policy and that the mage has already been migrated to that policy.
+/// This is the safe inspection path for gameplay or UI code because it verifies both that the
+/// game still points to the supplied policy and that the mage has already been migrated to that
+/// policy.
 ///
-/// In other words, the game never treats a policy as authoritative just because a user supplied it.
+/// In other words, the game never treats a policy as authoritative just because a user supplied
+/// it.
 public fun mana(
     game: &Game,
     active_policy: &token_bucket::Policy<ManaTag>,
@@ -269,10 +267,6 @@ public fun owner(mage: &Mage): address {
 
 public fun active_policy_id(game: &Game): ID {
     game.active_policy_id
-}
-
-public fun registry_id(game: &Game): ID {
-    game.registry_id
 }
 
 public fun mana_policy_id(mage: &Mage): ID {

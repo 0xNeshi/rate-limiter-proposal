@@ -1,11 +1,17 @@
 /// Generic token bucket library used by the example integrations in this repository.
 ///
 /// The intended lifecycle is:
-/// 1. create an immutable `Policy<Tag>` that defines the limiter rules for one domain,
-/// 2. create one long-lived `Registry<Tag>` for that same domain,
-/// 3. claim canonical `State<Tag>` objects from the registry for the scopes you want to rate limit,
-/// 4. call `available` for read-only inspection or `consume_or_abort` on the hot path,
-/// 5. when rules change, create a new policy and explicitly migrate each state to it.
+/// 1. create a `Policy<Tag>` that defines the limiter rules for one domain; internally it carries
+///    a hidden `ClaimRegistry<Tag>` as a dynamic object field,
+/// 2. claim canonical `State<Tag>` objects from that policy for the scopes you want to rate limit,
+/// 3. call `available` for read-only inspection or `consume_or_abort` on the hot path,
+/// 4. when rules change, call `rotate_policy` to produce a brand new `Policy<Tag>` (with a new
+///    object id) that carries the same `ClaimRegistry<Tag>` forward, then explicitly migrate each
+///    state to it.
+///
+/// Because the claim registry travels with every successive policy, scope uniqueness is preserved
+/// across policy upgrades: the same address or object id cannot claim a fresh full-capacity state
+/// after each rotation.
 ///
 /// The library enforces canonical state claiming and policy-pinned accounting, but it does not by
 /// itself decide which policy a product considers active. That choice belongs to the integrator,
@@ -21,6 +27,7 @@ module library_scope::token_bucket;
 use std::bcs;
 use sui::clock::Clock;
 use sui::derived_object;
+use sui::dynamic_object_field as dof;
 
 // === Errors ===
 
@@ -39,23 +46,27 @@ const SCOPE_KIND_GLOBAL: u8 = 0;
 const SCOPE_KIND_ADDRESS: u8 = 1;
 const SCOPE_KIND_OBJECT: u8 = 2;
 
+/// Key under which each policy stores its wrapped `ClaimRegistry<Tag>` as a dynamic object field.
+const CLAIM_REGISTRY_KEY: u8 = 0;
+
 // === Structs ===
 
-/// Immutable token bucket configuration.
+/// Token bucket configuration and current `ClaimRegistry<Tag>` holder.
 ///
-/// Integrators create a policy during setup, freeze or otherwise treat it as immutable, and then
-/// pass it into state-claiming and execution functions. When a product wants new rules, it creates
-/// a brand new `Policy<Tag>` and later migrates states to that new policy instead of mutating the
-/// old one in place.
-/// The reason for this is that it allows making `Policy<Tag>` immutable, thus reducing contention
-/// on-chain.
+/// The rule fields (`version`, `capacity`, `refill_amount`, `refill_interval_ms`, `enabled`) are
+/// set at creation and are never mutated by this library. In that sense the policy still behaves
+/// as a stable rule object: when rules change, the integrator calls `rotate_policy` to create a
+/// brand new `Policy<Tag>` with a new object id, and the `ClaimRegistry<Tag>` is handed over to
+/// the new policy so domain-wide scope uniqueness is preserved.
+///
+/// Policies are shared (not frozen) because `derived_object::claim` needs mutable access to the
+/// claim registry's `UID`, which is stored as a dynamic object field on the policy. The hot path
+/// (`available`, `consume_or_abort`, `migrate_state`) only needs `&Policy`, so read and consume
+/// transactions can still run in parallel with each other.
 ///
 /// On its own, creating a `Policy<Tag>` does not make that policy authoritative for any protocol.
 /// A protocol still needs its own rule for deciding which policy is active. In the examples, that
 /// rule is implemented by storing the active policy id inside the integrating object.
-///
-/// NOTE: we're considering removing `store`, and exposing a way to "freeze" the object from within
-/// the module.
 public struct Policy<phantom Tag> has key, store {
     id: UID,
     version: u16,
@@ -65,27 +76,25 @@ public struct Policy<phantom Tag> has key, store {
     enabled: bool,
 }
 
-/// Shared registry used only for deterministic one-time claims of `State<Tag>`.
+/// Internal canonical claim registry for a domain.
 ///
-/// Integrators usually create one registry per domain during setup and keep it for the lifetime of
-/// that domain. The registry is the object that "remembers" which scope keys already claimed a
-/// state, so later onboarding flows can deterministically create the canonical state for a user,
-/// object, or global scope exactly once. It does so by relying on [sui::derived_object][der_obj].
+/// Exactly one `ClaimRegistry<Tag>` exists per domain. It is created together with the first
+/// policy and is then carried forward into every successive policy via `rotate_policy`. The
+/// registry's `UID` is what `sui::derived_object` uses to guarantee that each scope key can only
+/// ever claim one canonical `State<Tag>`, regardless of how many times the policy rotates.
 ///
-/// The point of the registry is to avoid needing some separate mutable mapping just to answer
-/// "has this scope already received its limiter state?". Claiming through the registry makes the
-/// intended creation path obvious and prevents accidental duplication of live limiter state.
-///
-/// [der_obj]: https://docs.sui.io/references/framework/sui_sui/derived_object
-public struct Registry<phantom Tag> has key, store {
+/// This type is public because dynamic object fields require `key + store`, but the library does
+/// not expose any constructor or accessor to integrators — the registry is always accessed
+/// through `Policy<Tag>`.
+public struct ClaimRegistry<phantom Tag> has key, store {
     id: UID,
 }
 
 /// Live mutable accounting for one token bucket scope.
 ///
-/// This is the object the hot path mutates during real usage. It stores the policy it is pinned to,
-/// human-visible scope metadata, and the current token accounting fields so later reads, execution,
-/// and migrations can all reason about the same canonical state object.
+/// This is the object the hot path mutates during real usage. It stores the policy it is pinned
+/// to, human-visible scope metadata, and the current token accounting fields so later reads,
+/// execution, and migrations can all reason about the same canonical state object.
 ///
 /// `State<Tag>` exists separately from `Policy<Tag>` because the rules change much less often than
 /// live usage does. The policy stays stable and easy to audit, while the state absorbs frequent
@@ -104,14 +113,14 @@ public struct State<phantom Tag> has key, store {
 
 // === Public Functions ===
 
-/// Create a new immutable token bucket policy.
+/// Create the first token bucket policy for a domain.
 ///
-/// Call this during initial setup, or later when rolling out a new limiter configuration. States
-/// claimed after this call can be pinned to the returned policy, and existing states can continue
-/// executing under their current policy until the integrator explicitly migrates them.
+/// This also creates the domain's canonical `ClaimRegistry<Tag>` and attaches it to the returned
+/// policy. Call this once during setup. Later rule changes should go through `rotate_policy`,
+/// which keeps the same claim registry and therefore the same uniqueness guarantees.
 ///
-/// This function is intentionally a library primitive. In a real integration, it is usually called
-/// only from admin-controlled setup or update flows. Creating a policy directly through the library
+/// This function is intentionally a library primitive. In a real integration, it is usually
+/// called only from admin-controlled setup flows. Creating a policy directly through the library
 /// is not enough to bypass a well-formed integrator, because the integrator still decides which
 /// policy id it recognizes as active.
 ///
@@ -137,30 +146,54 @@ public fun create_policy<Tag>(
     refill_interval_ms: u64,
     ctx: &mut TxContext,
 ): Policy<Tag> {
-    assert!(capacity > 0, EInvalidPolicy);
-    assert!(refill_amount > 0, EInvalidPolicy);
-    assert!(refill_interval_ms > 0, EInvalidPolicy);
+    assert_rule_fields!(capacity, refill_amount, refill_interval_ms);
 
-    Policy {
+    let mut policy = Policy<Tag> {
         id: object::new(ctx),
         version,
         capacity,
         refill_amount,
         refill_interval_ms,
         enabled: true,
-    }
+    };
+    let registry = ClaimRegistry<Tag> { id: object::new(ctx) };
+    dof::add(&mut policy.id, CLAIM_REGISTRY_KEY, registry);
+    policy
 }
 
-/// Create a fresh registry that can later claim one state per scope key.
+/// Create a successor policy that inherits the current policy's `ClaimRegistry<Tag>`.
 ///
-/// Call this once when you initialize a new limiter domain. Integrators then keep the registry as
-/// shared or wrapped domain infrastructure and reuse it for later onboarding flows that need to
-/// claim canonical state objects.
+/// The returned policy has a brand new object id, so integrators still advance their notion of the
+/// "active" policy by swapping in a new id. The important difference from `create_policy` is that
+/// no new claim registry is minted: the existing registry is detached from the current policy and
+/// attached to the new one, so every scope that previously claimed a state under the domain keeps
+/// its uniqueness record. A user cannot re-claim a fresh full-capacity state under the new policy
+/// for a scope that already claimed under the old one.
 ///
-/// In other words, the registry is not part of the hot path. It is the uniqueness anchor for state
-/// creation.
-public fun create_registry<Tag>(ctx: &mut TxContext): Registry<Tag> {
-    Registry { id: object::new(ctx) }
+/// Old policies remain fully usable for reads, consumption on already-claimed state, and as the
+/// source of `migrate_state`. They just can no longer hand out new claims, which is the intended
+/// behavior after a rotation.
+public fun rotate_policy<Tag>(
+    current: &mut Policy<Tag>,
+    next_version: u16,
+    next_capacity: u64,
+    next_refill_amount: u64,
+    next_refill_interval_ms: u64,
+    ctx: &mut TxContext,
+): Policy<Tag> {
+    assert_rule_fields!(next_capacity, next_refill_amount, next_refill_interval_ms);
+
+    let registry: ClaimRegistry<Tag> = dof::remove(&mut current.id, CLAIM_REGISTRY_KEY);
+    let mut next = Policy<Tag> {
+        id: object::new(ctx),
+        version: next_version,
+        capacity: next_capacity,
+        refill_amount: next_refill_amount,
+        refill_interval_ms: next_refill_interval_ms,
+        enabled: true,
+    };
+    dof::add(&mut next.id, CLAIM_REGISTRY_KEY, registry);
+    next
 }
 
 /// Claim the canonical global state for a domain.
@@ -169,45 +202,50 @@ public fun create_registry<Tag>(ctx: &mut TxContext): Registry<Tag> {
 /// vault withdrawal limit. This is typically called during setup because there is only one global
 /// scope to claim, and all later execution paths mutate this same returned state.
 ///
-/// The important idea is that the registry is still involved even for the global case, so the
-/// global limiter follows the same canonical claim story as every other scope.
-public fun claim_global_state<Tag>(
-    registry: &mut Registry<Tag>,
-    policy: &Policy<Tag>,
-    clock: &Clock,
-): State<Tag> {
+/// The `ClaimRegistry<Tag>` stored inside the policy enforces that only one global state can ever
+/// be claimed for the domain, across every policy rotation, so the global limiter follows the
+/// same canonical claim story as every other scope.
+public fun claim_global_state<Tag>(policy: &mut Policy<Tag>, clock: &Clock): State<Tag> {
+    let policy_id = object::id(policy);
+    let capacity = policy.capacity;
+    let now_ms = clock.timestamp_ms();
+    let registry: &mut ClaimRegistry<Tag> = dof::borrow_mut(&mut policy.id, CLAIM_REGISTRY_KEY);
     State {
         id: derived_object::claim(&mut registry.id, SCOPE_KIND_GLOBAL),
-        policy_id: object::id(policy),
+        policy_id,
         scope_kind: SCOPE_KIND_GLOBAL,
         scope_key_hash: vector[],
-        last_refill_ms: clock.timestamp_ms(),
-        tokens: policy.capacity,
+        last_refill_ms: now_ms,
+        tokens: capacity,
     }
 }
 
 /// Claim the canonical address-scoped state for `owner`.
 ///
-/// Use this in onboarding flows where each account should get its own limiter state. The returned
-/// state starts full at the supplied policy capacity and becomes the canonical execution object for
-/// that address until it is later migrated to a newer policy.
+/// Use this in onboarding flows where each account should get its own limiter state. The
+/// returned state starts full at the supplied policy capacity and becomes the canonical execution
+/// object for that address until it is later migrated to a newer policy.
 ///
-/// This is the intended creation flow for per-address state. The registry ensures that one address
-/// does not accidentally end up with multiple canonical limiter states for the same domain
-/// (e.g. a single address having two `State<Tag>` objects, thus doubling its rate limit in the domain).
+/// This is the intended creation flow for per-address state. The same address cannot claim a
+/// second state for the same domain, even after a policy rotation, because the claim registry
+/// that backs the claim map travels with every policy version (e.g. a single address can never
+/// end up with two `State<Tag>` objects that double its rate limit in the domain).
 public fun claim_address_state<Tag>(
-    registry: &mut Registry<Tag>,
-    policy: &Policy<Tag>,
+    policy: &mut Policy<Tag>,
     owner: address,
     clock: &Clock,
 ): State<Tag> {
+    let policy_id = object::id(policy);
+    let capacity = policy.capacity;
+    let now_ms = clock.timestamp_ms();
+    let registry: &mut ClaimRegistry<Tag> = dof::borrow_mut(&mut policy.id, CLAIM_REGISTRY_KEY);
     State {
         id: derived_object::claim(&mut registry.id, owner),
-        policy_id: object::id(policy),
+        policy_id,
         scope_kind: SCOPE_KIND_ADDRESS,
         scope_key_hash: bcs::to_bytes(&owner),
-        last_refill_ms: clock.timestamp_ms(),
-        tokens: policy.capacity,
+        last_refill_ms: now_ms,
+        tokens: capacity,
     }
 }
 
@@ -217,29 +255,33 @@ public fun claim_address_state<Tag>(
 /// Game example, this is the claim path used when a newly created mage receives its mana state.
 /// This function is part of the setup/onboarding path, not the normal consumption hot path.
 ///
-/// The object id is the scope key, so each object can have at most one canonical limiter state for
-/// that domain.
+/// The object id is the scope key, so each object can have at most one canonical limiter state
+/// for the domain. The `ClaimRegistry<Tag>` held by the policy is what guarantees that, and it
+/// survives policy rotations.
 public fun claim_object_state<Tag>(
-    registry: &mut Registry<Tag>,
-    policy: &Policy<Tag>,
+    policy: &mut Policy<Tag>,
     scope_object_id: ID,
     clock: &Clock,
 ): State<Tag> {
+    let policy_id = object::id(policy);
+    let capacity = policy.capacity;
+    let now_ms = clock.timestamp_ms();
+    let registry: &mut ClaimRegistry<Tag> = dof::borrow_mut(&mut policy.id, CLAIM_REGISTRY_KEY);
     State {
         id: derived_object::claim(&mut registry.id, scope_object_id),
-        policy_id: object::id(policy),
+        policy_id,
         scope_kind: SCOPE_KIND_OBJECT,
         scope_key_hash: scope_object_id.to_bytes(),
-        last_refill_ms: clock.timestamp_ms(),
-        tokens: policy.capacity,
+        last_refill_ms: now_ms,
+        tokens: capacity,
     }
 }
 
 /// Compute the currently available tokens after applying elapsed refill time.
 ///
 /// This is the read-only inspection path for UIs, tests, and product logic that wants to show the
-/// current headroom without mutating state. It still verifies that the supplied state is pinned to
-/// the supplied policy so callers do not accidentally inspect stale or mismatched state.
+/// current headroom without mutating state. It still verifies that the supplied state is pinned
+/// to the supplied policy so callers do not accidentally inspect stale or mismatched state.
 ///
 /// Integrators usually pair this with their own "is this the active policy/state for my product?"
 /// checks before surfacing the result to end users.
@@ -252,9 +294,9 @@ public fun available<Tag>(policy: &Policy<Tag>, state: &State<Tag>, clock: &Cloc
 /// Main enforcing API: refill if enough time passed, then consume `amount` tokens or abort.
 ///
 /// This is the normal hot-path entry point integrators call from real actions such as withdrawing
-/// from a vault or casting a spell. It validates the policy/state pairing, applies any earned refill
-/// up to the current time, and then either updates the state with the consumed amount or aborts if
-/// the action would exceed the current limit.
+/// from a vault or casting a spell. It validates the policy/state pairing, applies any earned
+/// refill up to the current time, and then either updates the state with the consumed amount or
+/// aborts if the action would exceed the current limit.
 ///
 /// On its own, this function only knows about the supplied policy and state. A complete product
 /// flow should also validate that those objects are the ones the product currently recognizes as
@@ -277,16 +319,16 @@ public fun consume_or_abort<Tag>(
 
 /// Move a state from one policy to another.
 ///
-/// The state first accrues any refill under the old policy up to `clock.timestamp_ms()`,
-/// then its token balance is clamped to the new policy capacity and pinned to the new
-/// policy id. Integrators call this during policy rollout when they want existing state to begin
-/// executing under a newly created policy; some products do this immediately for one shared state,
-/// while others do it later as individual users or objects come back on-chain.
+/// The state first accrues any refill under the old policy up to `clock.timestamp_ms()`, then its
+/// token balance is clamped to the new policy capacity and pinned to the new policy id.
+/// Integrators call this during policy rollout when they want existing state to begin executing
+/// under a newly created policy; some products do this immediately for one shared state, while
+/// others do it later as individual users or objects come back on-chain.
 ///
-/// This function is intentionally generic, but the intended usage is still integrator-controlled.
-/// A well-formed integrator should decide which next policy is acceptable and when migration is
-/// allowed. The examples show two such choices: immediate migration in `vault` and staged migration
-/// in `mage_game`.
+/// This function is intentionally generic, but the intended usage is still
+/// integrator-controlled. A well-formed integrator should decide which next policy is acceptable
+/// and when migration is allowed. The examples show two such choices: immediate migration in
+/// `vault` and staged migration in `mage_game`.
 public fun migrate_state<Tag>(
     current_policy: &Policy<Tag>,
     next_policy: &Policy<Tag>,
@@ -334,10 +376,6 @@ public fun state_id<Tag>(state: &State<Tag>): ID {
     object::id(state)
 }
 
-public fun registry_id<Tag>(registry: &Registry<Tag>): ID {
-    object::id(registry)
-}
-
 public fun scope_kind<Tag>(state: &State<Tag>): u8 {
     state.scope_kind
 }
@@ -355,6 +393,12 @@ public fun last_refill_ms<Tag>(state: &State<Tag>): u64 {
 }
 
 // === Private Functions ===
+
+macro fun assert_rule_fields($capacity: u64, $refill_amount: u64, $refill_interval_ms: u64) {
+    assert!($capacity > 0, EInvalidPolicy);
+    assert!($refill_amount > 0, EInvalidPolicy);
+    assert!($refill_interval_ms > 0, EInvalidPolicy);
+}
 
 macro fun assert_policy<$Tag>($policy: &Policy<$Tag>, $state: &State<$Tag>) {
     let policy = $policy;
@@ -395,12 +439,6 @@ public fun destroy_state_for_testing<Tag>(state: State<Tag>) {
 }
 
 #[test_only]
-public fun destroy_registry_for_testing<Tag>(registry: Registry<Tag>) {
-    let Registry { id } = registry;
-    id.delete();
-}
-
-#[test_only]
 public fun destroy_policy_for_testing<Tag>(policy: Policy<Tag>) {
     let Policy {
         id,
@@ -410,5 +448,8 @@ public fun destroy_policy_for_testing<Tag>(policy: Policy<Tag>) {
         refill_interval_ms: _,
         enabled: _,
     } = policy;
+    let mut id = id;
+    let ClaimRegistry<Tag> { id: registry_id } = dof::remove(&mut id, CLAIM_REGISTRY_KEY);
+    registry_id.delete();
     id.delete();
 }
