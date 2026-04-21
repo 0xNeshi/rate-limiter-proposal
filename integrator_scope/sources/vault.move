@@ -1,22 +1,20 @@
-/// Example integration that applies the generic token bucket to a shared vault.
+/// Example integration that embeds a `RateLimiter` inside a shared vault.
 ///
-/// This module is the integrator scope for the vault domain. It takes the generic library objects
-/// and turns them into a product flow with clear authority:
-/// - the vault admin decides when policies are created or rotated,
-/// - the vault stores which policy and state are currently active,
-/// - end users only interact through deposit, read, and withdraw flows that validate those stored
-///   references.
+/// The vault is a single shared object that carries its own rate limiter as a field. There
+/// is no separate policy, registry, or state object: the limiter lives inside the vault, so
+/// every execution path that already has `&mut Vault` also has `&mut` access to the one
+/// limiter that controls withdrawals.
 ///
 /// The intended flow is:
-/// 1. the admin calls `create_and_share` once to create the shared vault, its first withdrawal
-///    policy, and the single global limiter state,
-/// 2. users can deposit freely, but every withdrawal consumes from that one shared state,
+/// 1. the admin calls `create_and_share` once to create the shared vault with an initial
+///    withdrawal bucket,
+/// 2. users can deposit freely, but every withdrawal consumes from the embedded limiter,
 /// 3. read paths such as `remaining_capacity` show the current shared headroom,
-/// 4. when the admin wants new withdrawal rules, `update_policy` rotates the policy (carrying the
-///    claim registry forward) and migrates the same shared state immediately.
+/// 4. the admin can call `update_policy` to rewrite the limiter's configuration in place;
+///    existing token balance is clamped to the new capacity.
 module integrator_scope::vault;
 
-use library_scope::token_bucket;
+use library_scope::rate_limiter::{Self, RateLimiter};
 use sui::balance::Balance;
 use sui::clock::Clock;
 use sui::coin::{Self, Coin};
@@ -27,82 +25,51 @@ use sui::sui::SUI;
 #[error(code = 0)]
 const EInsufficientVaultBalance: vector<u8> = "Insufficient vault balance";
 #[error(code = 1)]
-const EWrongPolicy: vector<u8> = "Wrong policy";
-#[error(code = 2)]
-const EWrongState: vector<u8> = "Wrong state";
-#[error(code = 3)]
 const ENotAdmin: vector<u8> = "Only the vault admin can do this";
 
 // === Structs ===
 
-/// Shared vault example that uses one global token bucket for all withdrawals.
+/// Shared vault that embeds one global withdrawal limiter.
 ///
-/// If user A withdraws first, the global bucket is partially or fully consumed and user B sees
-/// that reduced availability immediately. The vault stores the active policy id and the canonical
-/// shared state id so every execution path can verify it is consuming from the right limiter.
-///
-/// This is the key integrator check in the example. Even if someone can create some separate
-/// `Policy<WithdrawTag>` through the library, it does not matter unless the vault itself
-/// recognizes that policy id as active.
-public struct Vault has key, store {
+/// Because the limiter lives inside the vault, every successful withdrawal reduces what
+/// later users can withdraw until time-based refill restores capacity. There is no way for
+/// a user to present a different limiter: the only one that counts is the field on the
+/// shared vault object.
+public struct Vault has key {
     id: UID,
     admin: address,
-    policy_id: ID,
-    state_id: ID,
+    limiter: RateLimiter,
     balance: Balance<SUI>,
 }
 
-/// Tag used to separate the vault withdrawal limiter from any other domain.
-public struct WithdrawTag has copy, drop, store {}
-
 // === Public Functions ===
 
-/// Create the vault and fully initialize its token bucket objects in one transaction.
+/// Create the shared vault with an initial withdrawal bucket in one transaction.
 ///
-/// This is the one-time setup path for the example. It creates the first withdrawal policy (which
-/// carries the domain's canonical claim registry) and the single global state that all later
-/// withdrawals will consume from, then publishes the resulting objects in their final shared
-/// form.
-///
-/// Reviewers should read this as the moment where the generic library objects become the vault's
-/// official limiter. After this point, the vault's stored ids define which policy and state count
-/// as valid for end-user operations.
-#[allow(lint(share_owned))]
+/// This is the one-time setup path. It seeds the vault balance from `initial_coin`, creates
+/// the embedded token bucket limiter, and shares the resulting vault. No auxiliary policy or
+/// state objects are produced.
 public fun create_and_share(
     initial_coin: Coin<SUI>,
-    version: u16,
     capacity: u64,
     refill_amount: u64,
     refill_interval_ms: u64,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
-    let mut policy = token_bucket::create_policy<WithdrawTag>(
-        version,
-        capacity,
-        refill_amount,
-        refill_interval_ms,
-        ctx,
-    );
-    let state = policy.claim_global_state(clock);
-
     let vault = Vault {
         id: object::new(ctx),
         admin: ctx.sender(),
-        policy_id: object::id(&policy),
-        state_id: object::id(&state),
+        limiter: rate_limiter::new_bucket(capacity, refill_amount, refill_interval_ms, clock),
         balance: initial_coin.into_balance(),
     };
-
     transfer::share_object(vault);
-    transfer::public_share_object(state);
-    transfer::public_share_object(policy);
 }
 
 /// Anyone can deposit into the shared vault.
 ///
-/// Deposits only change the vault balance. They do not interact with the rate limiter because the
-/// limiter in this example is defined over withdrawals, not inflows.
+/// Deposits only change the vault balance. They do not interact with the rate limiter
+/// because the limiter in this example is defined over withdrawals, not inflows.
 public fun deposit(self: &mut Vault, deposit_coin: Coin<SUI>) {
     self.balance.join(deposit_coin.into_balance());
 }
@@ -112,98 +79,45 @@ public fun value(self: &Vault): u64 {
     self.balance.value()
 }
 
-/// Read the current remaining withdrawal capacity of the shared bucket.
-///
-/// This is the main read path for UIs, operators, or tests that want to inspect how much shared
-/// withdrawal headroom is currently left before attempting a withdrawal.
-///
-/// The vault first checks that the supplied policy and state are the same objects it recognizes
-/// as current, so callers cannot present an arbitrary policy/state pair and ask the vault to
-/// treat it as authoritative.
-public fun remaining_capacity(
-    self: &Vault,
-    policy: &token_bucket::Policy<WithdrawTag>,
-    state: &token_bucket::State<WithdrawTag>,
-    clock: &Clock,
-): u64 {
-    assert_active_policy!(self, policy);
-    assert_state!(self, state);
-    policy.available(state, clock)
+/// Read the current remaining withdrawal capacity of the embedded bucket.
+public fun remaining_capacity(self: &Vault, clock: &Clock): u64 {
+    self.limiter.available(clock)
 }
 
-/// Withdraw from the vault while consuming from the single global token bucket state.
+/// Withdraw from the vault while consuming from the embedded limiter.
 ///
-/// This is the main execution path of the example: verify the vault is paired with the supplied
-/// policy and state, consume from the one shared limiter state, and only then release coins from
-/// the vault balance. Because the state is global, every successful withdrawal reduces what later
-/// users can withdraw until time-based refill restores capacity.
-///
-/// This is also why a user-created policy cannot bypass the vault's intended limit. The vault
-/// only accepts the specific policy id and state id it has stored as active.
+/// This is the main execution path: consume `amount` from the limiter, then release coins
+/// from the vault balance. Because the limiter is owned by the vault, every successful
+/// withdrawal reduces what later users can withdraw until refill restores capacity.
 public fun withdraw(
     self: &mut Vault,
-    policy: &token_bucket::Policy<WithdrawTag>,
-    state: &mut token_bucket::State<WithdrawTag>,
     amount: u64,
     clock: &Clock,
     ctx: &mut TxContext,
 ): Coin<SUI> {
-    assert_active_policy!(self, policy);
-    assert_state!(self, state);
-    policy.consume_or_abort(state, amount, clock);
+    self.limiter.consume_or_abort(amount, clock);
     self.withdraw_unchecked(amount, ctx)
 }
 
-/// Admin-only policy rotation.
+/// Admin-only policy update.
 ///
-/// The vault migrates its single shared state immediately because there is only one active
-/// limiter state for the whole vault. Reviewers should read this as the "strict but simple"
-/// rollout model: one new policy is produced, one existing state is migrated, and all future
-/// withdrawals begin using the new rules right away.
-///
-/// The claim registry is carried forward from the current policy to the new one via
-/// `token_bucket::rotate_policy`, so the vault's domain-wide uniqueness guarantee survives the
-/// rotation. The underlying library `create_policy` / `rotate_policy` functions are generic, but
-/// the vault only exposes policy creation to its admin through this flow. That is the
-/// integrator's job in this design.
-#[allow(lint(share_owned))]
+/// Rewrites the embedded limiter's configuration in place. Any tokens earned under the old
+/// configuration are credited first, then the configuration is updated and the stored token
+/// balance is clamped to the new capacity. There is no separate rotation or migration step
+/// because the vault only ever has one limiter.
 public fun update_policy(
     self: &mut Vault,
-    current_policy: &mut token_bucket::Policy<WithdrawTag>,
-    state: &mut token_bucket::State<WithdrawTag>,
-    next_version: u16,
-    next_capacity: u64,
-    next_refill_amount: u64,
-    next_refill_interval_ms: u64,
+    capacity: u64,
+    refill_amount: u64,
+    refill_interval_ms: u64,
     clock: &Clock,
-    ctx: &mut TxContext,
+    ctx: &TxContext,
 ) {
     assert_admin!(self, ctx);
-    assert_active_policy!(self, current_policy);
-    assert_state!(self, state);
-
-    let next_policy = token_bucket::rotate_policy<WithdrawTag>(
-        current_policy,
-        next_version,
-        next_capacity,
-        next_refill_amount,
-        next_refill_interval_ms,
-        ctx,
-    );
-    current_policy.migrate_state(&next_policy, state, clock);
-    self.policy_id = object::id(&next_policy);
-    transfer::public_share_object(next_policy);
+    self.limiter.reconfigure_bucket(capacity, refill_amount, refill_interval_ms, clock);
 }
 
 // === View Helpers ===
-
-public fun active_policy_id(self: &Vault): ID {
-    self.policy_id
-}
-
-public fun state_id(self: &Vault): ID {
-    self.state_id
-}
 
 public fun admin(self: &Vault): address {
     self.admin
@@ -222,29 +136,11 @@ macro fun assert_admin($self: &Vault, $ctx: &TxContext) {
     assert!(self.admin == ctx.sender(), ENotAdmin);
 }
 
-macro fun assert_active_policy($self: &Vault, $policy: &token_bucket::Policy<WithdrawTag>) {
-    let self = $self;
-    let policy = $policy;
-    assert!(self.policy_id == object::id(policy), EWrongPolicy);
-}
-
-macro fun assert_state($self: &Vault, $state: &token_bucket::State<WithdrawTag>) {
-    let self = $self;
-    let state = $state;
-    assert!(self.state_id == object::id(state), EWrongState);
-}
-
 // === Test-Only Helpers ===
 
 #[test_only]
 public fun destroy_empty_for_testing(self: Vault) {
-    let Vault {
-        id,
-        admin: _,
-        policy_id: _,
-        state_id: _,
-        balance,
-    } = self;
+    let Vault { id, admin: _, limiter: _, balance } = self;
     assert!(balance.value() == 0, EInsufficientVaultBalance);
     balance.destroy_zero();
     id.delete();
