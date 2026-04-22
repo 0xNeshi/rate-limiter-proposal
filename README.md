@@ -11,7 +11,7 @@ Three strategies are offered in one enum, all sharing the same API:
 
 - **Bucket** — continuously refilling token bucket,
 - **FixedWindow** — up to `capacity` units per aligned time window,
-- **Cooldown** — minimum elapsed time between single-unit consumes.
+- **Cooldown** — minimum elapsed time between consumes (amount is ignored).
 
 > NOTE: the Bucket strategy is what is used in [Deepbook's reference implementation][reference].
 
