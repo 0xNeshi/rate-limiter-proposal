@@ -234,6 +234,156 @@ sequenceDiagram
     Mage-->>Player: mage is now current
 ```
 
+# Extending the Primitive
+
+Because `RateLimiter` is just a `store + drop` field, integrators can compose it into
+larger patterns without the library needing to know. Two common patterns are shown below.
+
+## Per-User Rate Limiter Inside One Shared Vault
+
+If the vault should enforce a limit **per depositor** rather than one global limit, the
+integrator keeps a `Table<address, RateLimiter>` inside the vault and looks up (or lazily
+creates) each user's limiter on the hot path.
+
+```move
+module my_vault::per_user_vault;
+
+use library_scope::rate_limiter::{Self, RateLimiter};
+use sui::balance::Balance;
+use sui::clock::Clock;
+use sui::coin::{Self, Coin};
+use sui::sui::SUI;
+use sui::table::{Self, Table};
+
+public struct PerUserVault has key {
+    id: UID,
+    admin: address,
+    per_user_capacity: u64,
+    per_user_refill_amount: u64,
+    per_user_refill_interval_ms: u64,
+    limiters: Table<address, RateLimiter>,
+    balance: Balance<SUI>,
+}
+
+public fun withdraw(
+    self: &mut PerUserVault,
+    amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): Coin<SUI> {
+    let user = ctx.sender();
+    if (!self.limiters.contains(user)) {
+        // Lazily mint this user's bucket, starting full under the vault's current config.
+        self.limiters.add(
+            user,
+            rate_limiter::new_bucket(
+                self.per_user_capacity,
+                self.per_user_refill_amount,
+                self.per_user_refill_interval_ms,
+                clock,
+            ),
+        );
+    };
+    let limiter = self.limiters.borrow_mut(user);
+    limiter.consume_or_abort(amount, clock);
+    coin::from_balance(self.balance.split(amount), ctx)
+}
+```
+
+Scope uniqueness is again provided by the integrator's own object model: the `Table` key is
+the user address, so each user has exactly one limiter without any registry. Admin can
+evolve `per_user_*` fields and call `reconfigure_bucket` across the table during migration,
+or just let old users keep their existing configuration until they next withdraw.
+
+## Automatic Policy Updates (Time-Scaled Configuration)
+
+If the policy should drift over time instead of waiting for admin calls, the integrator
+wraps the limiter in a small "super-policy" struct that re-applies scaled configuration
+before every consume. The library itself stays unchanged; all the scaling logic lives in
+the integrator wrapper.
+
+The example below scales `capacity`, `refill_amount`, and `refill_interval_ms` linearly in
+basis points per millisecond elapsed since creation. A positive rate is a bonus (values
+grow), a negative rate is degradation (values shrink).
+
+```move
+module my_game::auto_scaling_mana;
+
+use library_scope::rate_limiter::{Self, RateLimiter};
+use sui::clock::Clock;
+
+const BPS_DENOM: u64 = 10_000;
+
+public struct AutoScalingBucket has store {
+    limiter: RateLimiter,
+    base_capacity: u64,
+    base_refill_amount: u64,
+    base_refill_interval_ms: u64,
+    // Rate of change in basis points per millisecond. 1 bps/ms = +0.01% / ms.
+    rate_bps_per_ms: u64,
+    increasing: bool,
+    start_ms: u64,
+}
+
+public fun new(
+    capacity: u64,
+    refill_amount: u64,
+    refill_interval_ms: u64,
+    rate_bps_per_ms: u64,
+    increasing: bool,
+    clock: &Clock,
+): AutoScalingBucket {
+    AutoScalingBucket {
+        limiter: rate_limiter::new_bucket(capacity, refill_amount, refill_interval_ms, clock),
+        base_capacity: capacity,
+        base_refill_amount: refill_amount,
+        base_refill_interval_ms: refill_interval_ms,
+        rate_bps_per_ms,
+        increasing,
+        start_ms: clock.timestamp_ms(),
+    }
+}
+
+/// Re-apply scaled configuration before each hot-path call.
+fun apply_scale(self: &mut AutoScalingBucket, clock: &Clock) {
+    let elapsed = clock.timestamp_ms() - self.start_ms;
+    let delta = elapsed * self.rate_bps_per_ms;
+    let scale_bps = if (self.increasing) {
+        BPS_DENOM + delta
+    } else if (delta >= BPS_DENOM) {
+        0
+    } else {
+        BPS_DENOM - delta
+    };
+
+    let c = self.base_capacity * scale_bps / BPS_DENOM;
+    let r = self.base_refill_amount * scale_bps / BPS_DENOM;
+    let i = self.base_refill_interval_ms * scale_bps / BPS_DENOM;
+
+    // reconfigure_bucket requires all three values > 0; skip the update if the scaled
+    // configuration collapsed to zero so the existing limiter stays usable.
+    if (c > 0 && r > 0 && i > 0) {
+        self.limiter.reconfigure_bucket(c, r, i, clock);
+    };
+}
+
+public fun consume(self: &mut AutoScalingBucket, amount: u64, clock: &Clock) {
+    self.apply_scale(clock);
+    self.limiter.consume_or_abort(amount, clock);
+}
+
+public fun available(self: &mut AutoScalingBucket, clock: &Clock): u64 {
+    self.apply_scale(clock);
+    self.limiter.available(clock)
+}
+```
+
+Because `reconfigure_bucket` already accrues under the old rules before writing the new
+configuration, the scaling step is safe to call on every consume: each call credits any
+tokens earned under the previous (just-retired) configuration, then clamps to the new
+capacity. The super-policy is itself a `store` value, so it can be embedded in a `Game`
+or `Vault` object without any library-owned shared state.
+
 # Key Difference Between the Two Examples
 
 | Topic | Vault | Mage Game |
