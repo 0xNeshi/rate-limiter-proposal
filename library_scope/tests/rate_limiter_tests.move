@@ -35,6 +35,37 @@ fun bucket_starts_full_and_refills_over_time() {
 }
 
 #[test]
+fun bucket_with_tokens_can_start_empty_and_accrue() {
+    let mut test = test_scenario::begin(@0x1);
+    let mut clk = clock::create_for_testing(test.ctx());
+    clk.set_for_testing(0);
+
+    // Start empty: no headroom until the first refill interval elapses.
+    let mut rl = rate_limiter::new_bucket_with_tokens(10, 2, 5, 0, &clk);
+    assert_eq!(rl.available(&clk), 0);
+    assert!(!rl.try_consume(1, &clk));
+
+    // After one refill interval, 2 tokens are credited.
+    clk.set_for_testing(5);
+    assert_eq!(rl.available(&clk), 2);
+
+    clk.destroy_for_testing();
+    test.end();
+}
+
+#[test, expected_failure(abort_code = rate_limiter::EInvalidConfig)]
+fun bucket_with_tokens_rejects_initial_above_capacity() {
+    let mut test = test_scenario::begin(@0x1);
+    let mut clk = clock::create_for_testing(test.ctx());
+    clk.set_for_testing(0);
+
+    rate_limiter::new_bucket_with_tokens(10, 1, 10, 11, &clk);
+
+    clk.destroy_for_testing();
+    test.end();
+}
+
+#[test]
 fun bucket_try_consume_returns_false_when_empty() {
     let mut test = test_scenario::begin(@0x1);
     let mut clk = clock::create_for_testing(test.ctx());

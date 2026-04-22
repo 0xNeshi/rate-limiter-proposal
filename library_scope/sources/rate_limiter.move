@@ -61,20 +61,39 @@ public enum RateLimiter has store, drop {
 
 // === Constructors ===
 
-/// Create a full token bucket starting at `capacity`.
+/// Create a token bucket starting at full `capacity`.
+///
+/// Use `new_bucket_with_tokens` if the bucket should start at a different level, such as an
+/// empty onboarding bucket that must accrue before it can be used.
 public fun new_bucket(
     capacity: u64,
     refill_amount: u64,
     refill_interval_ms: u64,
     clock: &Clock,
 ): RateLimiter {
+    new_bucket_with_tokens(capacity, refill_amount, refill_interval_ms, capacity, clock)
+}
+
+/// Create a token bucket with an explicit initial token balance.
+///
+/// `initial_tokens` must be `<= capacity`. This is the knob to use when "start full" is the
+/// wrong default — for example, starting at `0` forces the caller to wait for the first
+/// refill interval before any consume can succeed.
+public fun new_bucket_with_tokens(
+    capacity: u64,
+    refill_amount: u64,
+    refill_interval_ms: u64,
+    initial_tokens: u64,
+    clock: &Clock,
+): RateLimiter {
     assert_bucket_config!(capacity, refill_amount, refill_interval_ms);
+    assert!(initial_tokens <= capacity, EInvalidConfig);
     RateLimiter::Bucket {
         capacity,
         refill_amount,
         refill_interval_ms,
         last_refill_ms: clock.timestamp_ms(),
-        tokens: capacity,
+        tokens: initial_tokens,
     }
 }
 
