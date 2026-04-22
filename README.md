@@ -1,17 +1,16 @@
 # Rate Limiter Design Proposal
 
-A small, embeddable onchain rate-limiting primitive for Sui, modelled after `sui::balance`.
+A small, embeddable onchain rate-limiting primitive for Sui.
 
 `RateLimiter` is a plain `store + drop` value that integrators place as a field inside their
-own objects. There is no registry, no standalone policy object, and no separate ID that
-integrators must track and assert against. The limiter's scope is whatever object it lives
+own objects. The limiter's scope is whatever object it lives
 inside.
 
 Three strategies are offered in one enum, all sharing the same API:
 
 - **Bucket** — continuously refilling token bucket,
 - **FixedWindow** — up to `capacity` units per aligned time window,
-- **Cooldown** — minimum elapsed time between consumes (amount is ignored).
+- **Cooldown** — minimum elapsed time between consumes.
 
 > NOTE: the Bucket strategy is what is used in [Deepbook's reference implementation][reference].
 
@@ -23,15 +22,14 @@ This proposal includes two concrete integration examples:
 # What This Repo Is Trying to Show
 
 The goal of this repo is to show a **minimal, embeddable rate-limiter primitive** that
-integrators can drop into their own objects without inheriting any library-owned objects,
-indices, or registries.
+integrators can drop into their own objects.
 
 The design answers these questions:
 
 - **How is the limiter stored?**
   - as a field inside the integrator's own object
 - **How is scope uniqueness enforced?**
-  - by the integrator's object model itself, not by a library-side registry
+  - by the integrator's object model itself
 - **How do rules change?**
   - by calling `reconfigure_*` on the embedded limiter; the integrator decides who can call
 
@@ -63,9 +61,10 @@ The integrator decides:
 - which of its own objects carries a limiter field,
 - who can create or reconfigure the limiter,
 - how migration or versioning works across configuration changes,
-- what end users are allowed to call directly.
+- what end users are allowed to call directly
+- events that should be emitted.
 
-# The Design (in Plain English)
+# The Design
 
 ## `RateLimiter`
 
@@ -234,6 +233,16 @@ sequenceDiagram
     Mage-->>Player: mage is now current
 ```
 
+# Key Difference Between the Two Examples
+
+| Topic | Vault | Mage Game |
+| --- | --- | --- |
+| **Where the limiter lives** | Inside the shared Vault | Inside each owned Mage |
+| **Scope of limiting** | One shared global limit | One independent limit per mage |
+| **Who shares the state** | All users share one limiter | Each mage has its own limiter |
+| **Policy update behavior** | Embedded limiter reconfigured immediately | Game bumps version, each mage migrates later |
+| **Best for** | Aggregate outflow control | Independent player or object usage |
+
 # Extending the Primitive
 
 Because `RateLimiter` is just a `store + drop` field, integrators can compose it into
@@ -384,16 +393,6 @@ tokens earned under the previous (just-retired) configuration, then clamps to th
 capacity. The super-policy is itself a `store` value, so it can be embedded in a `Game`
 or `Vault` object without any library-owned shared state.
 
-# Key Difference Between the Two Examples
-
-| Topic | Vault | Mage Game |
-| --- | --- | --- |
-| **Where the limiter lives** | Inside the shared Vault | Inside each owned Mage |
-| **Scope of limiting** | One shared global limit | One independent limit per mage |
-| **Who shares the state** | All users share one limiter | Each mage has its own limiter |
-| **Policy update behavior** | Embedded limiter reconfigured immediately | Game bumps version, each mage migrates later |
-| **Best for** | Aggregate outflow control | Independent player or object usage |
-
 # Use Cases
 
 ## Bucket
@@ -442,12 +441,7 @@ Best when you want simple limits per discrete period, such as per hour or per da
 
 # Takeaway
 
-This design gives a product team one small primitive that lives inside their own objects:
-
-- **no registry** to index or track per environment,
-- **no separate policy or state object** to pass around or assert against,
-- **no dynamic object fields**,
-- **no phantom tags** or generics forced onto the integrator.
+This design gives a product team one small primitive that lives inside their own objects.
 
 That makes it easy to explain ("it's like `Balance`, but for rate limits"), easy to audit
 (all state is on the object that already enforces permissions), and easy to evolve
