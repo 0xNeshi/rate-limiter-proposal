@@ -170,16 +170,29 @@ fun cooldown_requires_elapsed_time_between_consumes() {
 }
 
 #[test]
-fun cooldown_only_accepts_single_unit_consumes() {
+fun cooldown_ignores_amount_value() {
     let mut test = test_scenario::begin(@0x1);
     let mut clk = clock::create_for_testing(test.ctx());
     clk.set_for_testing(0);
 
     let mut rl = rate_limiter::new_cooldown(50);
-    // Cooldown is inherently binary; any amount other than 1 is rejected.
-    assert!(!rl.try_consume(2, &clk));
-    assert!(!rl.try_consume(0, &clk));
-    assert!(rl.try_consume(1, &clk));
+    // Cooldown does not count units — any positive amount is treated as one attempt.
+    assert!(rl.try_consume(5, &clk));
+    // Immediate retry is blocked by the cooldown, regardless of amount.
+    assert!(!rl.try_consume(1, &clk));
+
+    clk.destroy_for_testing();
+    test.end();
+}
+
+#[test, expected_failure(abort_code = rate_limiter::EInvalidAmount)]
+fun try_consume_with_zero_amount_aborts() {
+    let mut test = test_scenario::begin(@0x1);
+    let mut clk = clock::create_for_testing(test.ctx());
+    clk.set_for_testing(0);
+
+    let mut rl = rate_limiter::new_bucket(10, 1, 10, &clk);
+    rl.try_consume(0, &clk);
 
     clk.destroy_for_testing();
     test.end();

@@ -8,7 +8,7 @@
 /// Three strategies are provided in one enum, all sharing the same API:
 /// - `Bucket` — continuously refilling token bucket with a configurable refill schedule,
 /// - `FixedWindow` — up to `capacity` units per aligned time window that resets on boundaries,
-/// - `Cooldown` — minimum elapsed time between single-unit consumes.
+/// - `Cooldown` — minimum elapsed time between consumes (amount is ignored).
 ///
 /// Typical lifecycle:
 /// 1. the integrator creates a limiter with one of the `new_*` constructors and stores it in
@@ -29,6 +29,8 @@ const ERateLimited: vector<u8> = "Rate limited";
 const EInvalidConfig: vector<u8> = "Invalid config";
 #[error(code = 2)]
 const EWrongVariant: vector<u8> = "Wrong rate limiter variant";
+#[error(code = 3)]
+const EInvalidAmount: vector<u8> = "Amount must be greater than zero";
 
 // === Structs ===
 
@@ -52,10 +54,12 @@ public enum RateLimiter has store, drop {
         window_start_ms: u64,
         used: u64,
     },
-    /// Minimum `cooldown_ms` between single-unit consumes. No accrual and no capacity above 1.
+    /// Minimum `cooldown_ms` between consumes. Any positive amount is a single "attempt".
+    /// `last_used_ms` is `None` until the first successful consume, so the first consume
+    /// succeeds at any clock value, including zero.
     Cooldown {
         cooldown_ms: u64,
-        last_used_ms: u64,
+        last_used_ms: Option<u64>,
     },
 }
 
@@ -111,7 +115,7 @@ public fun new_fixed_window(capacity: u64, window_ms: u64, clock: &Clock): RateL
 /// Create a cooldown limiter that is ready to be used immediately.
 public fun new_cooldown(cooldown_ms: u64): RateLimiter {
     assert!(cooldown_ms > 0, EInvalidConfig);
-    RateLimiter::Cooldown { cooldown_ms, last_used_ms: 0 }
+    RateLimiter::Cooldown { cooldown_ms, last_used_ms: option::none() }
 }
 
 // === Hot Path ===
@@ -126,7 +130,11 @@ public fun consume_or_abort(self: &mut RateLimiter, amount: u64, clock: &Clock) 
 }
 
 /// Apply accrual, then consume `amount` if the limiter allows it. Returns `true` on success.
+///
+/// Aborts with `EInvalidAmount` if `amount == 0`. A zero-unit consume is treated as a
+/// programmer error, not a rate-limit condition, so behavior stays uniform across variants.
 public fun try_consume(self: &mut RateLimiter, amount: u64, clock: &Clock): bool {
+    assert!(amount > 0, EInvalidAmount);
     let now = clock.timestamp_ms();
     match (self) {
         RateLimiter::Bucket {
@@ -160,9 +168,11 @@ public fun try_consume(self: &mut RateLimiter, amount: u64, clock: &Clock): bool
             true
         },
         RateLimiter::Cooldown { cooldown_ms, last_used_ms } => {
-            if (amount != 1) return false;
-            if (*last_used_ms != 0 && now < *last_used_ms + *cooldown_ms) return false;
-            *last_used_ms = now;
+            // `amount` is meaningless to a cooldown: any call is an attempt to "fire".
+            if (last_used_ms.is_some() && now < *last_used_ms.borrow() + *cooldown_ms) {
+                return false
+            };
+            *last_used_ms = option::some(now);
             true
         },
     }
@@ -198,7 +208,8 @@ public fun available(self: &RateLimiter, clock: &Clock): u64 {
             else *capacity - *used
         },
         RateLimiter::Cooldown { cooldown_ms, last_used_ms } => {
-            if (*last_used_ms == 0 || now >= *last_used_ms + *cooldown_ms) 1 else 0
+            if (last_used_ms.is_none() || now >= *last_used_ms.borrow() + *cooldown_ms) 1
+            else 0
         },
     }
 }
